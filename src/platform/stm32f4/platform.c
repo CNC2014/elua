@@ -793,6 +793,18 @@ timer_data_type platform_timer_read_sys()
 // TODO: Many things
 #if (NUM_CAN > 0)
 
+#if defined( ELUA_BOARD_STM32F4ALT )
+#define CANx                       CAN1
+#define CAN_CLK                    RCC_APB1Periph_CAN1
+#define CAN_RX_PIN                 GPIO_Pin_8
+#define CAN_TX_PIN                 GPIO_Pin_9
+#define CAN_GPIO_PORT              GPIOB
+#define CAN_GPIO_CLK               RCC_AHB1Periph_GPIOB
+#define CAN_AF_PORT                GPIO_AF_CAN1
+#define CAN_RX_SOURCE              GPIO_PinSource8
+#define CAN_TX_SOURCE              GPIO_PinSource9
+#else
+
 #define CANx                       CAN1
 #define CAN_CLK                    RCC_APB1Periph_CAN1
 #define CAN_RX_PIN                 GPIO_Pin_0
@@ -802,6 +814,7 @@ timer_data_type platform_timer_read_sys()
 #define CAN_AF_PORT                GPIO_AF_CAN1
 #define CAN_RX_SOURCE              GPIO_PinSource0
 #define CAN_TX_SOURCE              GPIO_PinSource1
+#endif
 
 void cans_init( void )
 {
@@ -810,17 +823,17 @@ void cans_init( void )
 }
 
 /*       BS1 BS2 SJW Pre
-1M:      5   3   1   4
-500k:    7   4   1   6
-250k:    9   8   1   8
-125k:    9   8   1   16
-100k:    9   8   1   20 */
+1M:      12  8   1   2
+500k:    8   5   1   6
+250k:    8   5   1   12
+125k:    12  8   1   16
+100k:    12  8   1   20 */
 
 #define CAN_BAUD_COUNT 5
-static const u8 can_baud_bs1[]    = { CAN_BS1_9tq, CAN_BS1_9tq, CAN_BS1_9tq, CAN_BS1_7tq, CAN_BS1_5tq };
-static const u8 can_baud_bs2[]    = { CAN_BS1_8tq, CAN_BS1_8tq, CAN_BS1_8tq, CAN_BS1_4tq, CAN_BS1_3tq };
-static const u8 can_baud_sjw[]    = { CAN_SJW_1tq, CAN_SJW_1tq, CAN_SJW_1tq, CAN_SJW_1tq, CAN_SJW_1tq };
-static const u8 can_baud_pre[]    = { 20, 16, 8, 6, 4 };
+static const u8 can_baud_bs1[]    = { CAN_BS1_12tq, CAN_BS1_12tq, CAN_BS1_8tq, CAN_BS1_8tq, CAN_BS1_12tq };
+static const u8 can_baud_bs2[]    = { CAN_BS1_8tq,  CAN_BS1_8tq,  CAN_BS1_5tq, CAN_BS1_5tq, CAN_BS1_8tq };
+static const u8 can_baud_sjw[]    = { CAN_SJW_1tq,  CAN_SJW_1tq,  CAN_SJW_1tq, CAN_SJW_1tq, CAN_SJW_1tq };
+static const u8 can_baud_pre[]    = { 20, 16, 12, 6, 2 };
 static const u32 can_baud_rate[]  = { 100000, 125000, 250000, 500000, 1000000 };
 
 u32 platform_can_setup( unsigned id, u32 clock )

@@ -94,7 +94,7 @@
   _ROM( AUXLIB_ELUA, luaopen_elua, elua_map )\
   _ROM( AUXLIB_TMR, luaopen_tmr, tmr_map )\
   ADCLINE\
-/*  _ROM( AUXLIB_CAN, luaopen_can, can_map )*/ \
+  _ROM( AUXLIB_CAN, luaopen_can, can_map )\
   _ROM( AUXLIB_PWM, luaopen_pwm, pwm_map )\
   RPCLINE\
   LCDLINE\
