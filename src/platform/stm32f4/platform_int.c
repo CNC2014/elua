@@ -61,7 +61,7 @@ static const u32 exti_line[] = { EXTI_Line0, EXTI_Line1, EXTI_Line2, EXTI_Line3,
 
 static u16 exti_line_to_gpio( u32 line )
 {
-  return 0;//PLATFORM_IO_ENCODE( ( AFIO->EXTICR[line >> 0x02] >> (0x04 * ( line & 0x03 ) ) ) & 0x07, line, PLATFORM_IO_ENC_PIN );
+  return PLATFORM_IO_ENCODE( ( SYSCFG->EXTICR[line >> 0x02] >> (0x04 * ( line & 0x03 ) ) ) & 0x07, line, PLATFORM_IO_ENC_PIN );
 }
 
 // Convert a GPIO ID to a EXINT number
