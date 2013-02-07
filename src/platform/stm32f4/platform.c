@@ -45,8 +45,11 @@
 // NOTE: when using virtual timers, SYSTICKHZ and VTMR_FREQ_HZ should have the
 // same value, as they're served by the same timer (the systick)
 // Max SysTick preload value is 16777215, for STM32F103RET6 @ 72 MHz, lowest acceptable rate would be about 5 Hz
-#define SYSTICKHZ               16
+#define SYSTICKHZ               100
 #define SYSTICKMS               (1000 / SYSTICKHZ)
+
+#define WATCHDOG_ENABLE
+#define WATCH_COUNTER_RESET     127
 
 #if ( (HCLK / SYSTICKHZ)  > SysTick_LOAD_RELOAD_Msk)
 #error  "Sys tick reload value out of range"
@@ -111,6 +114,14 @@ int platform_init()
     /* Capture error */
     while (1);
   }
+
+#if defined( WATCHDOG_ENABLE )
+  // Enable Watchdog
+  RCC_APB1PeriphClockCmd(RCC_APB1Periph_WWDG, ENABLE);
+  WWDG_SetPrescaler(WWDG_Prescaler_8);
+  WWDG_SetWindowValue( WATCH_COUNTER_RESET );
+  WWDG_Enable( WATCH_COUNTER_RESET );
+#endif
 
   cmn_platform_init();
 
@@ -617,6 +628,12 @@ void SysTick_Handler( void )
 
   // Handle system timer call
   cmn_systimer_periodic();
+
+#if defined( WATCHDOG_ENABLE )
+  // Refresh watchdog if enabled
+  WWDG_SetCounter( WATCH_COUNTER_RESET );
+#endif
+
 }
 
 static void timers_init()
@@ -1163,6 +1180,12 @@ u32 platform_s_cpu_get_frequency()
   return HCLK;
 }
 
+void stm32_cpu_reset()
+{
+  NVIC_SystemReset();
+}
+
+
 // *****************************************************************************
 // ADC specific functions and variables
 
@@ -1527,16 +1550,16 @@ int platform_adc_start_sequence( )
 // ****************************************************************************
 // Platform specific modules go here
 
-#ifdef ENABLE_ENC
+#ifdef ENABLE_STM32_CPU
 
 #define MIN_OPT_LEVEL 2
 #include "lrodefs.h"
-extern const LUA_REG_TYPE enc_map[];
+extern const LUA_REG_TYPE stm32_cpu_map[];
 
 const LUA_REG_TYPE platform_map[] =
 {
 #if LUA_OPTIMIZE_MEMORY > 0
-  { LSTRKEY( "enc" ), LROVAL( enc_map ) },
+  { LSTRKEY( "cpu" ), LROVAL( stm32_cpu_map ) },
 #endif
   { LNILKEY, LNILVAL }
 };
@@ -1550,8 +1573,8 @@ LUALIB_API int luaopen_platform( lua_State *L )
 
   // Setup the new tables inside platform table
   lua_newtable( L );
-  luaL_register( L, NULL, enc_map );
-  lua_setfield( L, -2, "enc" );
+  luaL_register( L, NULL, stm32_cpu_map );
+  lua_setfield( L, -2, "cpu" );
 
   return 1;
 #endif // #if LUA_OPTIMIZE_MEMORY > 0

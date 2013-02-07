@@ -30,6 +30,7 @@
 #define BUILD_C_INT_HANDLERS
 #define BUILD_LUA_INT_HANDLERS
 //#define ENABLE_ENC
+#define ENABLE_STM32_CPU
 
 #define PLATFORM_HAS_SYSTIMER
 
@@ -55,7 +56,7 @@
 #define LCDLINE
 //#endif
 
-#ifdef ENABLE_ENC
+#ifdef ENABLE_STM32_CPU
 #define PS_LIB_TABLE_NAME "stm32"
 #endif
 
