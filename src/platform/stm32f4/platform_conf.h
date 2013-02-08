@@ -23,7 +23,7 @@
 //#define BUILD_DNS
 #define BUILD_CON_GENERIC
 #define BUILD_ADC
-//#define BUILD_RPC
+#define BUILD_RPC
 //#define BUILD_RFS
 //#define BUILD_CON_TCP
 #define BUILD_LINENOISE

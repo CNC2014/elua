@@ -48,12 +48,12 @@
 #define SYSTICKHZ               100
 #define SYSTICKMS               (1000 / SYSTICKHZ)
 
-#define WATCHDOG_ENABLE
-#define WATCH_COUNTER_RESET     127
-
 #if ( (HCLK / SYSTICKHZ)  > SysTick_LOAD_RELOAD_Msk)
 #error  "Sys tick reload value out of range"
 #endif
+
+#define WATCHDOG_ENABLE
+#define WATCH_COUNTER_RESET     127
 
 // ****************************************************************************
 // Platform initialization
