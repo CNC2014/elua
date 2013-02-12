@@ -123,6 +123,11 @@ int platform_init()
   WWDG_Enable( WATCH_COUNTER_RESET );
 #endif
 
+#ifdef BUILD_WOFS
+  // Flash initialization (for WOFS)
+  FLASH_Unlock();
+#endif
+
   cmn_platform_init();
 
   // All done
@@ -1546,6 +1551,42 @@ int platform_adc_start_sequence( )
 }
 
 #endif // ifdef BUILD_ADC
+
+// ****************************************************************************
+// Flash access functions
+
+#ifdef BUILD_WOFS
+u32 platform_s_flash_write( const void *from, u32 toaddr, u32 size )
+{
+  u32 ssize = 0;
+  const u16 *psrc = ( const u16* )from;
+  FLASH_Status flstat;
+
+  while( ssize < size )
+  {
+    if( ( flstat = FLASH_ProgramHalfWord( toaddr, *psrc ++ ) ) != FLASH_COMPLETE )
+    {
+      printf( "ERROR in platform_s_flash_write: stat=%d at %08X\n", ( int )flstat, ( unsigned )toaddr );
+      break;
+    }
+    toaddr += 2;
+    ssize += 2;
+  }
+  return ssize;
+}
+
+static const u16 flash_sectors[] = { FLASH_Sector_0, FLASH_Sector_1, FLASH_Sector_2, FLASH_Sector_3,
+                                     FLASH_Sector_4, FLASH_Sector_5, FLASH_Sector_6, FLASH_Sector_7,
+                                     FLASH_Sector_8, FLASH_Sector_9, FLASH_Sector_10, FLASH_Sector_11 };
+
+int platform_flash_erase_sector( u32 sector_id )
+{
+  printf("Sector ID: %d",sector_id );
+  return FLASH_EraseSector( flash_sectors[ sector_id ], VoltageRange_3 ) == FLASH_COMPLETE ? PLATFORM_OK : PLATFORM_ERR;
+}
+
+#endif // #ifdef BUILD_WOFS
+
 
 // ****************************************************************************
 // Platform specific modules go here

@@ -181,6 +181,14 @@ u32 platform_s_cpu_get_frequency();
 #define MEM_START_ADDRESS       { ( void* )end, (void* )( CCMDATARAM_BASE ) }
 #define MEM_END_ADDRESS         { ( void* )( SRAM_BASE + SRAM_SIZE - STACK_SIZE_TOTAL - 1 ), (void*)( CCMDATARAM_BASE + CCMDATARAM_SIZE - 1 ) }
 
+// Flash data (only for ELUA_CPU_STM32F407VG for now)
+// #ifdef ELUA_CPU_STM32F407VG
+// #define INTERNAL_FLASH_SIZE             ( 1024 * 1024 )
+// #define INTERNAL_FLASH_SECTOR_ARRAY     { 16384, 16384, 16384, 16384, 65536, 131072, 131072, 131072, 131072, 131072, 131072, 131072 }
+// #define INTERNAL_FLASH_START_ADDRESS    0x08000000
+// #define BUILD_WOFS
+// #endif // #ifdef ELUA_CPU_STM32F407VG
+
 // Interrupt queue size
 #define PLATFORM_INT_QUEUE_LOG_SIZE 5
 
