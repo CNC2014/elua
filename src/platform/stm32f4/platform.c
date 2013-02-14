@@ -52,7 +52,7 @@
 #error  "Sys tick reload value out of range"
 #endif
 
-#define WATCHDOG_ENABLE
+//#define WATCHDOG_ENABLE
 #define WATCH_COUNTER_RESET     127
 
 // ****************************************************************************
@@ -125,6 +125,9 @@ int platform_init()
 
 #ifdef BUILD_WOFS
   // Flash initialization (for WOFS)
+  FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
+                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR);
+
   FLASH_Unlock();
 #endif
 
@@ -1581,7 +1584,6 @@ static const u16 flash_sectors[] = { FLASH_Sector_0, FLASH_Sector_1, FLASH_Secto
 
 int platform_flash_erase_sector( u32 sector_id )
 {
-  printf("Sector ID: %d",sector_id );
   return FLASH_EraseSector( flash_sectors[ sector_id ], VoltageRange_3 ) == FLASH_COMPLETE ? PLATFORM_OK : PLATFORM_ERR;
 }
 
