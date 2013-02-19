@@ -425,6 +425,8 @@ void cmn_systimer_periodic(void)
   cmn_systimer_counter += cmn_systimer_us_per_interrupt;
 }
 
+u64 cmn_systimer_last_crtsys = 0;
+u8 cmn_systimer_overflow = 0;
 timer_data_type cmn_systimer_get(void)
 {
   u64 tempcnt, crtsys, rawcrtsys;
@@ -437,6 +439,12 @@ timer_data_type cmn_systimer_get(void)
   } while( platform_timer_sys_raw_read() < tempcnt || cmn_systimer_toggle != tmptoggle );
 
   crtsys += tempcnt / cmn_systimer_ticks_for_us;
+  if( crtsys < cmn_systimer_last_crtsys && cmn_systimer_overflow == 0 )
+  {
+    while( crtsys < cmn_systimer_last_crtsys )
+      crtsys += cmn_systimer_us_per_interrupt;
+  }
+
   if( crtsys > PLATFORM_TIMER_SYS_MAX ) // timer overflow
   {
     crtsys -= PLATFORM_TIMER_SYS_MAX;
@@ -444,8 +452,12 @@ timer_data_type cmn_systimer_get(void)
     if( cmn_systimer_counter > PLATFORM_TIMER_SYS_MAX )
       cmn_systimer_counter -= PLATFORM_TIMER_SYS_MAX;
     platform_timer_sys_enable_int();
+    cmn_systimer_overflow = 1;
   }
+  else
+    cmn_systimer_overflow = 0;
 
+  cmn_systimer_last_crtsys = crtsys;
   return ( timer_data_type )crtsys;
 }
 
