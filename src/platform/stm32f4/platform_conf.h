@@ -119,7 +119,7 @@
 #define NUM_TIMER             12
 #define NUM_PHYS_TIMER        12
 #define NUM_PWM               4
-#define NUM_ADC               16
+#define NUM_ADC               18
 #define NUM_CAN               1
 
 // Enable RX buffering on UART
