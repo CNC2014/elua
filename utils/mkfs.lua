@@ -1,4 +1,5 @@
 -- A module to convert an entire directory to a C array, in the "romfs" format
+
 module( ..., package.seeall )
 require "pack"
 local sf = string.format
@@ -9,12 +10,15 @@ local _crtline = '  '
 local _numdata = 0
 local _bytecnt = 0
 local maxlen = 30
+local _fcnt = 0
+local alignment = 4
 local outfile
 
 -- Line output function
 local function _add_data( data, outfile, moredata )
   if moredata == nil then moredata = true end
   _bytecnt = _bytecnt + 1
+  _fcnt = _fcnt + 1
   if moredata then
     _crtline = _crtline .. sf( "0x%02X, ", data )
   else
@@ -78,7 +82,7 @@ function mkfs( dirname, outname, flist, mode, compcmd )
         -- Do we need to process the file?
         local fextpart, fnamepart = ''
         if mode == "compile" or mode == "compress" then
-          fnamepart, fextpart = utils.split_path( realname )
+          fnamepart, fextpart = utils.split_ext( realname )
           local newext = mode == "compress" and ".lua.tmp" or ".lc"
           if fextpart == ".lua" then
             newname = fnamepart .. newext
@@ -102,7 +106,7 @@ function mkfs( dirname, outname, flist, mode, compcmd )
               return false
             end
             if mode == "compile" then
-              fnamepart, fextpart = utils.split_path( fname )
+              fnamepart, fextpart = utils.split_ext( fname )
               fname = fnamepart .. ".lc"
             end
           end
@@ -113,25 +117,33 @@ function mkfs( dirname, outname, flist, mode, compcmd )
           os.remove( newname )
         end
         -- Write name, size, id, numpars
+        _fcnt = 0
         for i = 1, #fname do
           _add_data( fname:byte( i ), outfile )
         end
         _add_data( 0, outfile ) -- ASCIIZ
-        local plen = string.pack( "<h", #filedata )
+        local plen = string.pack( "<i", #filedata )
+         -- Round to a multiple of 'alignment'
+        while _bytecnt % alignment ~= 0 do
+          _add_data( 0, outfile )
+        end
+        -- Write size
         _add_data( plen:byte( 1 ), outfile )
         _add_data( plen:byte( 2 ), outfile )
-        -- Then write the rest of the file
+        _add_data( plen:byte( 3 ), outfile )
+        _add_data( plen:byte( 4 ), outfile )
+       -- Then write the rest of the file
         for i = 1, #filedata do
           _add_data( filedata:byte( i ), outfile )
         end
         -- Report
-        print( sf( "Encoded file %s (%d bytes)", fname, #filedata ) )
+        print( sf( "Encoded file %s (%d bytes real size, %d bytes encoded size)", fname, #filedata, _fcnt ) )
       end
     end
   end
     
-  -- All done, write the final "0" (terminator)
-  _add_data( 0, outfile, false )
+  -- All done, write the final "0xFF" (terminator)
+  _add_data( 0xFF, outfile, false )
   outfile:write( "};\n\n#endif\n" );
   outfile:close()
   print( sf( "Done, total size is %d bytes", _bytecnt ) )

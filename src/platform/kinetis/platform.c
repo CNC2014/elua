@@ -191,7 +191,7 @@ void platform_s_uart_send( unsigned id, u8 data )
   uart_putchar( puarts[ id ], data );
 }
 
-int platform_s_uart_recv( unsigned id, s32 timeout )
+int platform_s_uart_recv( unsigned id, timer_data_type timeout )
 {
   UART_MemMapPtr uart = puarts[ id ];
   
@@ -215,7 +215,7 @@ static void timers_init()
   PIT_MCR_REG( PIT_BASE_PTR ) &= ~PIT_MCR_MDIS_MASK;
 }
 
-void platform_s_timer_delay( unsigned id, u32 delay_us )
+void platform_s_timer_delay( unsigned id, timer_data_type delay_us )
 {
   // Disable timer first
   PIT_TCTRL_REG( PIT_BASE_PTR, id ) &= ~PIT_TCTRL_TEN_MASK;
@@ -228,7 +228,7 @@ void platform_s_timer_delay( unsigned id, u32 delay_us )
   while( ( PIT_TFLG_REG( PIT_BASE_PTR, id ) & PIT_TFLG_TIF_MASK ) == 0 );  
 }
 
-u32 platform_s_timer_op( unsigned id, int op, u32 data )
+timer_data_type platform_s_timer_op( unsigned id, int op, timer_data_type data )
 {
   u32 res = 0;
 
@@ -258,14 +258,38 @@ u32 platform_s_timer_op( unsigned id, int op, u32 data )
     case PLATFORM_TIMER_OP_GET_CLOCK:    
       res = periph_clk_khz * 1000;
       break;
+
+    case PLATFORM_TIMER_OP_GET_MAX_CNT:
+      res = 0xFFFFFFFF;
+      break;
   }
   return res;
 }
 
-int platform_s_timer_set_match_int( unsigned id, u32 period_us, int type )
+int platform_s_timer_set_match_int( unsigned id, timer_data_type period_us, int type )
 {
   return PLATFORM_TIMER_INT_INVALID_ID;
 }
+
+// u64 platform_timer_sys_raw_read()
+// {
+//   return SysTick->LOAD - SysTick->VAL;
+// }
+
+// void platform_timer_sys_disable_int()
+// {
+//   SysTick->CTRL &= ~( 1 << SysTick_CTRL_TICKINT_Pos );
+// }
+
+// void platform_timer_sys_enable_int()
+// {
+//   SysTick->CTRL |= 1 << SysTick_CTRL_TICKINT_Pos;
+// }
+
+// timer_data_type platform_timer_read_sys()
+// {
+//   return cmn_systimer_get();
+// }
 
 // *****************************************************************************
 // PWM functions
@@ -301,7 +325,7 @@ static void pwms_init()
 }
 
 // Helper function: return the PWM clock
-static u32 platform_pwm_get_clock( unsigned id )
+u32 platform_pwm_get_clock( unsigned id )
 {
   FTM_MemMapPtr tmr = pwms[ id >> 1 ];
   
@@ -309,7 +333,7 @@ static u32 platform_pwm_get_clock( unsigned id )
 }
 
 // Helper function: set the PWM clock
-static u32 platform_pwm_set_clock( unsigned id, u32 clock )
+u32 platform_pwm_set_clock( unsigned id, u32 clock )
 {
   FTM_MemMapPtr tmr = pwms[ id >> 1 ];
   u32 baseclk = periph_clk_khz * 1000;
@@ -341,35 +365,22 @@ u32 platform_pwm_setup( unsigned id, u32 frequency, unsigned duty )
   return basefreq / modval;
 }
 
-u32 platform_pwm_op( unsigned id, int op, u32 data )
+void platform_pwm_start( unsigned id )
 {
   FTM_MemMapPtr tmr = pwms[ id >> 1 ];
   int ch = id & 1;
   PORT_MemMapPtr pwm_port = ports[ PWM_PORT ];   
-  u32 res = 0;
+  pwm_port->PCR[ pwm_pins[ id ] ] = PORT_PCR_MUX( 0x03 );
+  FTM_CnSC_REG( tmr, ch ) |= FTM_CnSC_ELSB_MASK;
+}
 
-  switch( op )
-  {
-    case PLATFORM_PWM_OP_SET_CLOCK:
-      res = platform_pwm_set_clock( id, data );
-      break;
-
-    case PLATFORM_PWM_OP_GET_CLOCK:
-      res = platform_pwm_get_clock( id );
-      break;
-
-    case PLATFORM_PWM_OP_START:
-      pwm_port->PCR[ pwm_pins[ id ] ] = PORT_PCR_MUX( 0x03 );
-      FTM_CnSC_REG( tmr, ch ) |= FTM_CnSC_ELSB_MASK;
-      break;
-
-    case PLATFORM_PWM_OP_STOP:
-      FTM_CnSC_REG( tmr, ch ) &= ~FTM_CnSC_ELSB_MASK;    
-      pwm_port->PCR[ pwm_pins[ id ] ] = PORT_PCR_MUX( 0x01 );     
-      break;
-  }
-
-  return res;
+void platform_pwm_stop( unsigned id )
+{
+  FTM_MemMapPtr tmr = pwms[ id >> 1 ];
+  int ch = id & 1;
+  PORT_MemMapPtr pwm_port = ports[ PWM_PORT ];   
+  FTM_CnSC_REG( tmr, ch ) &= ~FTM_CnSC_ELSB_MASK;    
+  pwm_port->PCR[ pwm_pins[ id ] ] = PORT_PCR_MUX( 0x01 );   
 }
 
 // *****************************************************************************

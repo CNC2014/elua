@@ -22,6 +22,7 @@ end
 
 -- Return a string with $(key) replaced with 'value'
 local function expand_key( s, key, value )
+  if not value then return s end
   local fmt = sf( "%%$%%(%s%%)", key )
   return ( s:gsub( fmt, value ) )
 end
@@ -135,6 +136,8 @@ _target.new = function( target, dep, command, builder, ttype )
   builder:register_target( target, self )
   self:set_dependencies( dep )
   self.dep = self:_build_dependencies( self.origdep )
+  self.dont_clean = false
+  self.can_substitute_cmdline = false
   self._force_rebuild = #self.dep == 0
   builder.runlist[ target ] = false
   self:set_type( ttype )
@@ -205,11 +208,18 @@ _target.set_target_args = function( self, args )
 end
 
 -- Function to execute in clean mode
-_target._cleaner = function( target, deps, dummy )
+_target._cleaner = function( target, deps, tobj, disp_mode )
   -- Clean the main target if it is not a phony target
+  local dprint = function( ... )
+    if disp_mode ~= "minimal" then print( ... ) end
+  end
   if not is_phony( target ) then 
-    io.write( sf( "[builder] Removing %s ... ", target ) )
-    if os.remove( target ) then print "done." else print "failed!" end
+    if tobj.dont_clean then
+      dprint( sf( "[builder] Target '%s' will not be deleted", target ) )
+      return 0
+    end
+    if disp_mode ~= "minimal" then io.write( sf( "[builder] Removing %s ... ", target ) ) end
+    if os.remove( target ) then dprint "done." else dprint "failed!" end
   end
   return 0
 end
@@ -228,7 +238,7 @@ _target.build = function( self )
       local res = dep[ i ]:build()
       docmd = docmd or res
       local t = dep[ i ]:target_name()
-      if exttype( dep[ i ] ) == "_target" and t then
+      if exttype( dep[ i ] ) == "_target" and t and not is_phony( self.target ) then
         docmd = docmd or get_ftime( t ) > get_ftime( self.target )
       end
       if t then depends = depends .. t .. " " end
@@ -248,7 +258,7 @@ _target.build = function( self )
   docmd = docmd or self._force_rebuild or self.builder.clean_mode
   local keep_flag = true
   if docmd and self.command then
-    if self.builder.disp_mode ~= 'all' and not self.builder.clean_mode then
+    if self.builder.disp_mode ~= 'all' and self.builder.disp_mode ~= "minimal" and not self.builder.clean_mode then
       io.write( utils.col_funcs[ self.dispcol ]( self.dispstr ) .. " " )
     end
     local cmd, code = self.command
@@ -259,15 +269,15 @@ _target.build = function( self )
       cmd = expand_key( cmd, "FIRST", dep[ 1 ]:target_name() )
       if self.builder.disp_mode == 'all' then
         print( cmd )
-      else
+      elseif self.builder.disp_mode ~= "minimal" then
         print( self.target )
       end
-      code = os.execute( cmd )   
+      code = self:execute( cmd )
     else
-      if not self.builder.clean_mode and self.builder.disp_mode ~= "all" then
+      if not self.builder.clean_mode and self.builder.disp_mode ~= "all" and self.builder.disp_mode ~= "minimal" then
         print( self.target )
       end
-      code = cmd( self.target, self.dep, self._target_args )
+      code = cmd( self.target, self.dep, self.builder.clean_mode and self or self._target_args, self.builder.disp_mode )
       if code == 1 then -- this means "mark target as 'not executed'"
         keep_flag = false
         code = 0
@@ -294,15 +304,40 @@ _target.target_name = function( self )
   return get_target_name( self.target )
 end
 
+-- Restrict cleaning this target
+_target.prevent_clean = function( self, flag )
+  self.dont_clean = flag
+end
+
 -- Object type
 _target.__type = function()
   return "_target"
 end
 
+_target.execute = function( self, cmd )
+  local code
+  if utils.is_windows() and #cmd > 8190 and self.can_substitute_cmdline then
+    -- Avoid cmd's maximum command line length limitation
+    local t = cmd:find( " " )
+    f = io.open( "tmpcmdline", "w" )
+    local rest = cmd:sub( t + 1 )
+    f:write( ( rest:gsub( "\\", "/" ) ) )
+    f:close()
+    cmd = cmd:sub( 1, t - 1 ) .. " @tmpcmdline"
+  end
+  local code = os.execute( cmd )
+  os.remove( "tmpcmdline" )
+  return code
+end
+
+_target.set_substitute_cmdline = function( self, flag )
+  self.can_substitute_cmdline = flag
+end
+
 -------------------------------------------------------------------------------
 -- Builder public interface
 
-builder = { KEEP_DIR = 0, BUILD_DIR = 1, BUILD_DIR_LINEARIZED = 2 }
+builder = { KEEP_DIR = 0, BUILD_DIR_LINEARIZED = 1 }
 
 ---------------------------------------
 -- Initialization and option handling
@@ -315,171 +350,78 @@ builder.new = function( build_dir )
   self.build_dir = build_dir or ".build"
   self.exe_extension = utils.is_windows() and "exe" or ""
   self.clean_mode = false
-  self.options = {}
+  self.opts = utils.options_handler()
   self.args = {}
+  self.user_args = {}
   self.build_mode = self.KEEP_DIR
   self.targets = {}
   self.targetargs = {}
   self._tlist = {}
   self.runlist = {}
   self.disp_mode = 'all'
+  self.cmdline_macros = {}
+  self.c_targets = {}
+  self.preprocess_mode = false
+  self.asm_mode = false
   return self
 end
 
--- Argument validator: boolean value
-builder._bool_validator = function( v )
-  if v == '0' or v:upper() == 'FALSE' then
-    return false
-  elseif v == '1' or v:upper() == 'TRUE' then
-    return true
-  end
-end
-
--- Argument validator: choice value
-builder._choice_validator = function( v, allowed )
-  for i = 1, #allowed do
-    if v:upper() == allowed[ i ]:upper() then return allowed[ i ] end
-  end
-end
-
--- Argument validator: choice map (argument value maps to something)
-builder._choice_map_validator = function( v, allowed )
-  for k, value in pairs( allowed ) do
-    if v:upper() == k:upper() then return value end
-  end
-end
-
--- Argument validator: string value (no validation)
-builder._string_validator = function( v )
-  return v
-end
-
--- Argument printer: boolean value
-builder._bool_printer = function( o )
-  return "true|false", o.default and "true" or "false"
-end
-
--- Argument printer: choice value
-builder._choice_printer = function( o )
-  local clist, opts  = '', o.data
-  for i = 1, #opts do
-    clist = clist .. ( i ~= 1 and "|" or "" ) .. opts[ i ]
-  end
-  return clist, o.default
-end
-
--- Argument printer: choice map printer
-builder._choice_map_printer = function( o )
-  local clist, opts, def = '', o.data
-  local i = 1
-  for k, v in pairs( opts ) do
-    clist = clist .. ( i ~= 1 and "|" or "" ) .. k
-    if o.default == v then def = k end
-    i = i + 1
-  end
-  return clist, def
-end
-
--- Argument printer: string printer
-builder._string_printer = function( o )
-  return nil, o.default
-end
-
--- Add an option of the specified type
-builder._add_option = function( self, optname, opttype, help, default, data )
-  local validators = 
-  { 
-    string = builder._string_validator, choice = builder._choice_validator, 
-    boolean = builder._bool_validator, choice_map = builder._choice_map_validator
-  }
-  local printers = 
-  { 
-    string = builder._string_printer, choice = builder._choice_printer, 
-    boolean = builder._bool_printer, choice_map = builder._choice_map_printer
-  }
-  if not validators[ opttype ] then
-    print( sf( "[builder] Invalid option type '%s'", opttype ) )
-    os.exit( 1 )
-  end
-  table.insert( self.options, { name = optname, help = help, validator = validators[ opttype ], printer = printers[ opttype ], data = data, default = default } )
-end
-
--- Find an option with the given name
-builder._find_option = function( self, optname )
-  for i = 1, #self.options do
-    local o = self.options[ i ]
-    if o.name:upper() == optname:upper() then return self.options[ i ] end
-  end
-end
-
 -- Helper: create the build output directory
-builder._create_outdir = function( self )
-  if self.output_dir_created then return end
-   -- Create builds directory if needed
-  local mode = lfs.attributes( self.build_dir, "mode" )
-  if not mode or mode ~= "directory" then
-    if not utils.full_mkdir( self.build_dir ) then
-      print( "[builder] Unable to create directory " .. self.build_dir )
-      os.exit( 1 )
+builder._create_build_dir = function( self )
+  if self.build_dir_created then return end
+  if self.build_mode ~= self.KEEP_DIR then
+     -- Create builds directory if needed
+    local mode = lfs.attributes( self.build_dir, "mode" )
+    if not mode or mode ~= "directory" then
+      if not utils.full_mkdir( self.build_dir ) then
+        print( "[builder] Unable to create directory " .. self.build_dir )
+        os.exit( 1 )
+      end
     end
   end
-  self.output_dir_created = true
+  self.build_dir_created = true
 end
 
--- 'add option' helper (automatically detects option type)
+-- Add an options to the builder
 builder.add_option = function( self, name, help, default, data )
-  local otype
-  if type( default ) == 'boolean' then
-    otype = 'boolean'
-  elseif data and type( data ) == 'table' and #data == 0 then
-    otype = 'choice_map'
-  elseif data and type( data ) == 'table' then
-    otype = 'choice'
-    data = utils.linearize_array( data )
-  elseif type( default ) == 'string' then
-    otype = 'string'
-  else
-    print( sf( "[builder] Cannot detect option type for '%s'", name ) )
-    os.exit( 1 )
-  end
-  self:_add_option( name, otype, help, default, data )
+  self.opts:add_option( name, help, default, data )
 end
 
 -- Initialize builder from the given command line
 builder.init = function( self, args )
   -- Add the default options
-  self:add_option( "build_mode", 'choose location of the object files', self.KEEP_DIR,
-                   { keep_dir = self.KEEP_DIR, build_dir = self.BUILD_DIR, build_dir_linearized = self.BUILD_DIR_LINEARIZED } )
-  self:add_option( "build_dir", 'choose build directory', self.build_dir )
-  self:add_option( "disp_mode", 'set builder display mode', 'summary', { 'all', 'summary' } )
+  local opts = self.opts
+  opts:add_option( "build_mode", 'choose location of the object files', self.KEEP_DIR,
+                   { keep_dir = self.KEEP_DIR, build_dir_linearized = self.BUILD_DIR_LINEARIZED } )
+  opts:add_option( "build_dir", 'choose build directory', self.build_dir )
+  opts:add_option( "disp_mode", 'set builder display mode', 'summary', { 'all', 'summary', 'minimal' } )
   -- Apply default values to all options
-  for i = 1, #self.options do
-    local o = self.options[ i ]
+  for i = 1, opts:get_num_opts() do
+    local o = opts:get_option( i )
     self.args[ o.name:upper() ] = o.default
   end
   -- Read and interpret command line
   for i = 1, #args do
     local a = args[ i ]
     if a:upper() == "-C" then                   -- clean option (-c)
-      self.clean_mode = true  
+      self.clean_mode = true
     elseif a:upper() == '-H' then               -- help option (-h)
       self:_show_help()
       os.exit( 1 )
+    elseif a:upper() == "-E" then               -- preprocess
+      self.preprocess_mode = true
+    elseif a:upper() == "-S" then               -- generate assembler
+      self.asm_mode = true
+    elseif a:find( '-D' ) == 1 and #a > 2 then  -- this is a macro definition that will be auomatically added to the compiler flags
+      table.insert( self.cmdline_macros, a:sub( 3 ) ) 
     elseif a:find( '=' ) then                   -- builder argument (key=value)
-      local si, ei, k, v = a:find( "([^=]+)=(.*)$" )
-      local opt = self:_find_option( k )
-      if not opt then
-        print( sf( "[builder] Invalid option '%s'", k ) )
+      local k, v = opts:handle_arg( a )
+      if not k then
         self:_show_help()
         os.exit( 1 )
       end
-      local optv = opt.validator( v, opt.data )
-      if optv == nil then
-        print( sf( "[builder] Invalid value '%s' for option '%s'", v, k ) )
-        self:_show_help()
-        os.exit( 1 )
-      end
-      self.args[ k:upper() ] = optv
+      self.args[ k:upper() ] = v
+      self.user_args[ k:upper() ] = true
     else                                        -- this must be the target name / target arguments
       if self.targetname == nil then            
         self.targetname = a
@@ -499,20 +441,19 @@ builder.get_option = function( self, optname )
   return self.args[ optname:upper() ]
 end
 
+-- Returns true if the given option was specified by the user on the command line, false otherwise
+builder.is_user_option = function( self, optname )
+  return self.user_args[ optname:upper() ]
+end
+
 -- Show builder help
 builder._show_help = function( self )
   print( "[builder] Valid options:" )
   print( "  -h: help (this text)" )
   print( "  -c: clean target" )
-  for i = 1, #self.options do
-    local o = self.options[ i ]
-    print( sf( "\n  %s: %s", o.name, o.help ) )
-    local values, default = o.printer( o )
-    if values then
-      print( sf( "    Possible values: %s", values ) )
-    end
-    print( sf( "    Default value: %s", default or "none (changes at runtime)" ) )
-  end
+  print( "  -E: generate preprocessed output for single file targets" )
+  print( "  -S: generate assembler output for single file targets" )
+  self.opts:show_help()
 end
 
 ---------------------------------------
@@ -553,14 +494,19 @@ builder.set_build_mode = function( self, mode )
   self.build_mode = mode
 end
 
--- Set the output directory
-builder.set_output_dir = function( self, dir )
-  if self.output_dir_created then
-    print "[ builder] Error: output directory already created"
+-- Set the build directory
+builder.set_build_dir = function( self, dir )
+  if self.build_dir_created then
+    print "[builder] Error: build directory already created"
     os.exit( 1 )
   end
   self.build_dir = dir
-  self:_create_outdir()
+  self:_create_build_dir()
+end
+
+-- Return the current build directory
+builder.get_build_dir = function( self )
+  return self.build_dir
 end
 
 -- Return the target arguments
@@ -621,7 +567,7 @@ end
 -- Sets the way commands are displayed
 builder.set_disp_mode = function( self, mode )
   mode = mode:lower()
-  if mode ~= 'all' and mode ~= 'summary' then
+  if mode ~= 'all' and mode ~= 'summary' and mode ~= "minimal" then
     print( sf( "[builder] Invalid display mode '%s'", mode ) )
     os.exit( 1 )
   end
@@ -646,12 +592,22 @@ end
 
 -- Return a compile command based on the specified args
 builder.compile_cmd = function( self, args )
+  args.defines = { args.defines, self.cmdline_macros }
+  if self.preprocess_mode then
+    args.comptype = "-E"
+  elseif self.asm_mode then
+    args.comptype = "-S"
+  else
+    args.comptype = "-c"
+  end
   return self:_generic_cmd( args )
 end
 
 -- Return an assembler command based on the specified args
 builder.asm_cmd = function( self, args )
+  args.defines = { args.defines, self.cmdline_macros }
   args.compiler = args.assembler
+  args.comptype = self.preprocess_mode and "-E" or "-c"
   return self:_generic_cmd( args )
 end
 
@@ -691,11 +647,13 @@ end
 
 -- Create and return a new link target
 builder.link_target = function( self, out, dep, link_cmd )
-  if not out:find( "%." ) and self.exe_extension and #self.exe_extension > 0 then
+  local path, ext = utils.split_ext( out )
+  if not ext and self.exe_extension and #self.exe_extension > 0 then
     out = out .. self.exe_extension
   end
   local t = _target.new( out, dep, link_cmd or self.link_cmd, self, 'link' )
   if self:_compare_config( 'link' ) then t:force_rebuild( true ) end
+  t:set_substitute_cmdline( true )
   return t
 end
 
@@ -718,23 +676,18 @@ end
 -- Actual building functions
 
 -- Return the object name corresponding to a source file name
-builder.obj_name = function( self, name )
-  local r = self.obj_extension
+builder.obj_name = function( self, name, ext )
+  local r = ext or self.obj_extension
   if not r then
     r = utils.is_windows() and "obj" or "o"
   end
   local objname = utils.replace_extension( name, r )
   -- KEEP_DIR: object file in the same directory as source file
-  -- BUILD_DIR: object file in the build directory
   -- BUILD_DIR_LINEARIZED: object file in the build directory, linearized filename
   if self.build_mode == self.KEEP_DIR then 
     return objname
   elseif self.build_mode == self.BUILD_DIR_LINEARIZED then
     return self.build_dir .. utils.dir_sep .. linearize_fname( objname )
-  else
-    local si, ei, path, fname = objname:find( "(.+)/(.-)$" )
-    if not si then fname = objname end
-    return self.build_dir .. utils.dir_sep .. fname 
   end
 end
 
@@ -757,62 +710,50 @@ builder.read_depends = function( self, ftable )
   return dtable
 end
 
--- Build and interpret dependencies for the given source files
--- "flable" is either a space-separated string with all the source files or an array
-builder.make_depends = function( self, ftable )
+-- Create and return compile targets for the given sources
+builder.create_compile_targets = function( self, ftable, res )
   if type( ftable ) == 'string' then ftable = utils.string_to_table( ftable ) end
-
-  -- Start with initial dependency data (this might be nil when generated initially)
-  local initdep = self:read_depends( ftable )
-
+  res = res or {}
+  ccmd, oname = "-c", "o"
+  if self.preprocess_mode then
+    ccmd, oname = '-E', "pre"
+  elseif self.asm_mode then
+    ccmd, oname = '-S', 's'
+  end
   -- Build dependencies for all targets
-  self.dtable = {}
   for i = 1, #ftable do
     local isasm = ftable[ i ]:find( "%.c$" ) == nil
     -- Skip assembler targets if 'asm_dep_cmd' is set to 'false'
     -- Skip C targets if 'c_dep_cmd' is set to 'false'
     local skip = isasm and self.asm_dep_cmd == false
     skip = skip or ( not isasm and self.c_dep_cmd == false )
+    local deps = self:get_dep_filename( ftable[ i ] )
+    local target
+    if not isasm then
+      local depcmd = skip and self.comp_cmd or ( self.c_dep_cmd or self.comp_cmd:gsub( ccmd .. " ", sf( ccmd .. " -MD -MF %s ", deps ) ) )
+      target = self:c_target( self:obj_name( ftable[ i ], oname ), { self:get_registered_target( deps ) or ftable[ i ] }, depcmd )
+    else
+      local depcmd = skip and self._asm_cmd or ( self.asm_dep_cmd or self._asm_cmd:gsub( ccmd .. " ", sf( ccmd .. " -MD -MF %s ", deps ) ) )
+      target = self:asm_target( self:obj_name( ftable[ i ], oname ), { self:get_registered_target( deps ) or ftable[ i ] }, depcmd )
+    end
+    -- Pre build step: replace dependencies with the ones from the compiler generated dependency file
+    local dprint = function( ... ) if self.disp_mode ~= "minimal" then print( ... ) end end
     if not skip then
-      local cmd = isasm and self._asm_cmd or self.comp_cmd
-      local depcmd = cmd:gsub( "-c ", "-E -MM " )
-      if isasm and self.asm_dep_cmd then depcmd = self.asm_dep_cmd end
-      if not isasm and self.c_dep_cmd then depcmd = self.c_dep_cmd end
-      local target = self:dep_target( ftable[ i ], initdep[ ftable[ i ] ], depcmd )
-      -- The post build function will read the generated dependencies and save
-      -- them into an instance-related field (dtable)
-      target:set_post_build_function( function( t, _ ) 
+      target:set_pre_build_function( function( t, _ )
         if not self.clean_mode then
-          local tname = t.dep[ 1 ]:target_name()
-          if tname then
-            local fres = self:read_depends( tname )
-            self.dtable[ tname ] = fres[ tname ] 
-          end
+          local fres = self:read_depends( ftable[ i ] )
+          local fdeps = fres[ ftable[ i ] ]
+          if #fdeps:gsub( "%s+", "" ) == 0 then fdeps = ftable[ i ] end
+          t:set_dependencies( fdeps )
+        else
+          if self.disp_mode ~= "minimal" then io.write( sf( "[builder] Removing %s ... ", deps ) ) end
+          if os.remove( deps ) then dprint "done." else dprint "failed!" end
         end
       end )
     end
-  end
-end
-
--- Create and return compile targets for the given sources
-builder.create_compile_targets = function( self, ftable, res )
-  if type( ftable ) == 'string' then ftable = utils.string_to_table( ftable ) end
-  res = res or {}
-  -- Build dependencies for all targets
-  for i = 1, #ftable do
-    local target 
-    local deps = self:get_dep_filename( ftable[ i ] )
-    if ftable[ i ]:find( "%.c$" ) then
-      target = self:c_target( self:obj_name( ftable[ i ] ), { self:get_registered_target( deps ) or ftable[ i ] } )
-    else
-      target = self:asm_target( self:obj_name( ftable[ i ] ), { self:get_registered_target( deps ) or ftable[ i ] } )
-    end
-    -- Post build step: replace dependencies with the ones generated by 'make_depends'
-    target:set_pre_build_function( function( t, _ ) 
-      if not self.clean_mode then
-        t:set_dependencies( self.dtable[ ftable[ i ] ] or ftable[ i ] )
-      end
-    end )
+    target.srcname = ftable[ i ]
+    -- TODO: check clean mode?
+    if not isasm then self.c_targets[ #self.c_targets + 1 ] = target end
     table.insert( res, target )
   end
   return res
@@ -838,44 +779,60 @@ end
 builder.build = function( self, target )
   local t = self.targetname or self.deftarget
   if not t then
-    print( "[builder] Error: build target not specified" )
+    print( utils.col_red( "[builder] Error: build target not specified" ) )
     os.exit( 1 )
   end
-  if not self.targets[ t ] then
-    print( sf( "[builder] Error: target '%s' not found", t ) )
-    print( "Available targets: " )
-    for k, v in pairs( self.targets ) do
-      if not is_phony( k ) then 
-        print( sf( "  %s - %s", k, v.help or "(no help available)" ) )
+  local trg 
+  -- Look for single targets (C source files)
+  for _, ct in pairs( self.c_targets ) do
+    if ct.srcname == t then
+      trg = ct
+      break
+    end
+  end
+  if not trg then
+    if not self.targets[ t ] then
+      print( sf( "[builder] Error: target '%s' not found", t ) )
+      print( "Available targets: " )
+      print( "  all source files" )
+      for k, v in pairs( self.targets ) do
+        if not is_phony( k ) then 
+          print( sf( "  %s - %s", k, v.help or "(no help available)" ) )
+        end
       end
+      if self.deftarget and not is_phony( self.deftarget ) then
+        print( sf( "Default target is '%s'", self.deftarget ) )
+      end
+      os.exit( 1 )
+    else
+      if self.preprocess_mode or self.asm_mode then
+        print( "[builder] Error: preprocess (-E) or asm (-S) works only with single file targets." )
+        os.exit( 1 )
+      end
+      trg = self.targets[ t ].target
     end
-    if self.deftarget and not is_phony( self.deftarget ) then
-      print( sf( "Default target is '%s'", self.deftarget ) )
-    end
-    os.exit( 1 )
   end
-  self:_create_outdir()
+  self:_create_build_dir()
   -- At this point check if we have a change in the state that would require a rebuild
   if self:_compare_config( 'comp' ) then
-    print "[builder] Forcing rebuild due to configuration change"
+    print( utils.col_yellow( "[builder] Forcing rebuild due to configuration change." ) )
     self.global_force_rebuild = true
   else
     self.global_force_rebuild = false
   end
   -- Do the actual build
-  local res = self.targets[ t ].target:build()
-  if not res then print( sf( '[builder] %s: up to date', t ) ) end
+  local res = trg:build()
+  if not res then print( utils.col_yellow( sf( '[builder] %s: up to date', t ) ) ) end
   if self.clean_mode then 
     os.remove( self.build_dir .. utils.dir_sep .. ".builddata.comp" ) 
     os.remove( self.build_dir .. utils.dir_sep .. ".builddata.link" ) 
   end
-  print "[builder] Done building target."
+  print( utils.col_yellow( "[builder] Done building target." ) )
   return res
 end
 
 -- Create dependencies, create object files, link final object
 builder.make_exe_target = function( self, target, file_list )
-  self:make_depends( file_list )
   local odeps = self:create_compile_targets( file_list )
   local exetarget = self:link_target( target, odeps )
   self:default( self:add_target( exetarget ) )

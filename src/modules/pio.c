@@ -1,6 +1,5 @@
 // Module for interfacing with PIO
 
-#include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
 #include "platform.h"
@@ -10,6 +9,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <ctype.h>
+
+#if NUM_PIO > 0
 
 // PIO public constants
 #define PIO_DIR_OUTPUT      0
@@ -26,7 +27,7 @@ static pio_type pio_masks[ PLATFORM_IO_PORTS ];
 // Generic helper functions
 
 // Helper function: clear all masks
-static void pioh_clear_masks()
+static void pioh_clear_masks(void)
 {
   int i;
   
@@ -143,6 +144,18 @@ static int pio_pin_setdir( lua_State *L )
   return pio_gen_setdir( L, PIO_PIN_OP );
 }
 
+// Lua: pio.pin.output( pin1, pin2, ..., pinn )
+static int pio_pin_output( lua_State *L )
+{
+  return pioh_set_pins( L, 1, PLATFORM_IO_PIN_DIR_OUTPUT );
+}
+
+// Lua: pio.pin.input( pin1, pin2, ..., pinn )
+static int pio_pin_input( lua_State *L )
+{
+  return pioh_set_pins( L, 1, PLATFORM_IO_PIN_DIR_INPUT );
+}
+
 // Lua: pio.pin.setpull( pio.PULLUP | pio.PULLDOWN | pio.NOPULL, pin1, pin2, ..., pinn )
 static int pio_pin_setpull( lua_State *L )
 {
@@ -199,6 +212,18 @@ static int pio_pin_getval( lua_State *L )
 static int pio_port_setdir( lua_State *L )
 {
   return pio_gen_setdir( L, PIO_PORT_OP );
+}
+
+// Lua: pio.port.output( port1, port2, ..., portn )
+static int pio_port_output( lua_State *L )
+{
+  return pioh_set_ports( L, 1, PLATFORM_IO_PIN_DIR_OUTPUT, PLATFORM_IO_ALL_PINS );
+}
+
+// Lua: pio.port.input( port1, port2, ..., portn )
+static int pio_port_input( lua_State *L )
+{
+  return pioh_set_ports( L, 1, PLATFORM_IO_PIN_DIR_INPUT, PLATFORM_IO_ALL_PINS );
 }
 
 // Lua: pio.port.setpull( pio.PULLUP | pio.PULLDOWN | pio.NOPULL, port1, port2, ..., portn )
@@ -259,7 +284,7 @@ static int pio_mt_index( lua_State* L )
   
   if( !key || *key != 'P' )
     return 0;
-  if( isupper( key[ 1 ] ) ) // PA, PB, ...
+  if( isupper( (unsigned char) key[ 1 ] ) ) // PA, PB, ...
   {
     if( PIO_PREFIX != 'A' )
       return 0;
@@ -274,10 +299,10 @@ static int pio_mt_index( lua_State* L )
 #ifdef ELUA_PLATFORM_AVR32
       /* AVR32UC3A0 has a bizarre "port" called "PX" with 40 pins which map to
        * random areas of hardware ports 2 and 3:
-       * PX00-PX10 = GPIO100-GPIO90	//Port 3 pins 04-00; port 2 pins 31-26
-       * PX11-PX14 = GPIO109-GPIO106	//Port 3 pins 13-10
-       * PX15-PX34 = GPIO89-GPIO70	//Port 2 pins 25-06
-       * PX35-PX39 = GPIO105-GPIO101	//Port 3 pins 09-05
+       * PX00-PX10 = GPIO100-GPIO90     //Port 3 pins 04-00; port 2 pins 31-26
+       * PX11-PX14 = GPIO109-GPIO106    //Port 3 pins 13-10
+       * PX15-PX34 = GPIO89-GPIO70      //Port 2 pins 25-06
+       * PX35-PX39 = GPIO105-GPIO101    //Port 3 pins 09-05
        * Then port = trunc(GPIO/32) and pin = GPIO % 32
        *
        * This "Port X" exists in EVK1100 and MIZAR32 but not on EVK1101, which
@@ -287,32 +312,32 @@ static int pio_mt_index( lua_State* L )
 
       // Disallow "PC_06-PC_31" as aliases for PX pins
       if (key[1] == 'C' && pin > 5)
-	return 0;
+        return 0;
 
       // Disallow "PD_nn" as aliases for PX pins
       if (key[1] == 'D')
-	return 0;
+        return 0;
 
       // Map PX pins 00-39 to their ports/pins in the hardware register layout.
       if (key[1] == 'X')
       {
-	unsigned gpio;
+        unsigned gpio;
 
-	// You cannot perform port operations on port X because it
-	// doesn't exist in hardware.
-	if (pin == 0xFFFF)
-	  return 0;
+        // You cannot perform port operations on port X because it
+        // doesn't exist in hardware.
+        if (pin == 0xFFFF)
+          return 0;
 
-	// Map PX pin numbers to GPIO pin numbers
-	if( pin < 0 ) return 0;
-	if( pin <= 10 ) gpio = 100 - pin;
-	else if( pin <= 14 ) gpio = 109 - (pin - 11);
-	else if( pin <= 34 ) gpio = 89 - (pin - 15);
-	else if( pin <= 39 ) gpio = 105 - (pin - 35);
-	else return 0;
+        // Map PX pin numbers to GPIO pin numbers
+        if( pin < 0 ) return 0;
+        if( pin <= 10 ) gpio = 100 - pin;
+        else if( pin <= 14 ) gpio = 109 - (pin - 11);
+        else if( pin <= 34 ) gpio = 89 - (pin - 15);
+        else if( pin <= 39 ) gpio = 105 - (pin - 35);
+        else return 0;
 
-	port = gpio >> 5;
-	pin = gpio & 0x1F;
+        port = gpio >> 5;
+        pin = gpio & 0x1F;
       }
 #endif
     }
@@ -357,9 +382,41 @@ static int pio_mt_index( lua_State* L )
 static int pio_decode( lua_State *L )
 {
   int code = ( int )luaL_checkinteger( L, 1 );
-  
-  lua_pushinteger( L, PLATFORM_IO_GET_PORT( code ) );
-  lua_pushinteger( L, PLATFORM_IO_GET_PIN( code ) );
+  int port = PLATFORM_IO_GET_PORT( code );
+  int pin  = PLATFORM_IO_GET_PIN( code );
+
+#ifdef ELUA_PLATFORM_AVR32
+  /* AVR32UC3A0 has a bizarre "port" called "PX" with 40 pins which map to
+   * random areas of hardware ports 2 and 3:
+   * PX00-PX04 = GPIO100-GPIO96     //Port 3 pins 04-00
+   * PX05-PX10 = GPIO95-GPIO90      //Port 2 pins 31-26
+   * PX11-PX14 = GPIO109-GPIO106    //Port 3 pins 13-10
+   * PX15-PX34 = GPIO89-GPIO70      //Port 2 pins 25-06
+   * PX35-PX39 = GPIO105-GPIO101    //Port 3 pins 09-05
+   *
+   * Here, we reverse the decode the hardware port/pins to the PX pin names.
+   * This is the inverse of the code above in pio_mt_index().
+   */
+  if ( ( port == 2 && pin >= 6 ) ||
+       ( port == 3 && pin <= 13 ) )
+  {
+    switch ( port ) {
+    case 2:
+      if( pin >= 26 ) pin = (26 + 10) - pin;      // PX05-PX10
+      else            pin = (25 + 15) - pin;      // PX15-PX34
+      break;
+    case 3:
+      if( pin <= 4 )      pin = 4 - pin;          // PX00-PX04
+      else if( pin <= 9 ) pin = (35 + 9) - pin;   // PX35-PX39
+      else /* 10-13 */    pin = (13 + 11) - pin;  // PX11-PX14
+      break;
+    }
+    port = 'X' - 'A';   // 'A','B','C' are returned as 0,1,2 so 'X' is 23
+  }
+#endif
+
+  lua_pushinteger( L, port );
+  lua_pushinteger( L, pin );
   return 2;
 }
 
@@ -371,6 +428,8 @@ static int pio_decode( lua_State *L )
 static const LUA_REG_TYPE pio_pin_map[] =
 {
   { LSTRKEY( "setdir" ), LFUNCVAL ( pio_pin_setdir ) },
+  { LSTRKEY( "output" ), LFUNCVAL( pio_pin_output ) },
+  { LSTRKEY( "input" ), LFUNCVAL( pio_pin_input ) },
   { LSTRKEY( "setpull" ), LFUNCVAL( pio_pin_setpull ) },
   { LSTRKEY( "setval" ), LFUNCVAL( pio_pin_setval ) },
   { LSTRKEY( "sethigh" ), LFUNCVAL( pio_pin_sethigh ) },
@@ -381,7 +440,9 @@ static const LUA_REG_TYPE pio_pin_map[] =
 
 static const LUA_REG_TYPE pio_port_map[] =
 {
-  { LSTRKEY( "setdir" ), LFUNCVAL ( pio_port_setdir ) },
+  { LSTRKEY( "setdir" ), LFUNCVAL( pio_port_setdir ) },
+  { LSTRKEY( "output" ), LFUNCVAL( pio_port_output ) },
+  { LSTRKEY( "input" ), LFUNCVAL( pio_port_input ) },
   { LSTRKEY( "setpull" ), LFUNCVAL( pio_port_setpull ) },
   { LSTRKEY( "setval" ), LFUNCVAL( pio_port_setval ) },
   { LSTRKEY( "sethigh" ), LFUNCVAL( pio_port_sethigh ) },
@@ -392,10 +453,10 @@ static const LUA_REG_TYPE pio_port_map[] =
 
 const LUA_REG_TYPE pio_map[] =
 {
+  { LSTRKEY( "decode" ), LFUNCVAL( pio_decode ) },  
 #if LUA_OPTIMIZE_MEMORY > 0
   { LSTRKEY( "pin" ), LROVAL( pio_pin_map ) },
   { LSTRKEY( "port" ), LROVAL( pio_port_map ) },
-  { LSTRKEY( "decode" ), LFUNCVAL( pio_decode ) },  
   { LSTRKEY( "INPUT" ), LNUMVAL( PIO_DIR_INPUT ) },
   { LSTRKEY( "OUTPUT" ), LNUMVAL( PIO_DIR_OUTPUT ) },
   { LSTRKEY( "PULLUP" ), LNUMVAL( PLATFORM_IO_PIN_PULLUP ) },
@@ -437,4 +498,6 @@ LUALIB_API int luaopen_pio( lua_State *L )
   return 1;
 #endif // #if LUA_OPTIMIZE_MEMORY > 0
 }
+
+#endif
 

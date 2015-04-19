@@ -9,16 +9,19 @@ local sf = string.format
 -- Data structure declarations
 
 -- List here all the sections for which we're generating the documentation
-local doc_sections = { "arch_platform", "refman_gen", "refman_ps_lm3s", "refman_ps_str9", "refman_ps_mbed" }
+local doc_sections = { "arch_platform", "refman_gen", "refman_ps_lm3s", "refman_ps_str9", "refman_ps_stm32", "refman_ps_stm32f4", "refman_ps_mbed", "refman_ps_mizar32" }
 
 -- List here all the components of each section
 local components = 
 { 
-  arch_platform = { "ll", "pio", "spi", "uart", "timers", "pwm", "cpu", "eth", "adc", "i2c", "can" },
+  arch_platform = { "ll", "pio", "spi", "uart", "timers", "pwm", "cpu", "eth", "adc", "i2c", "can", "flash" },
   refman_gen = { "bit", "pd", "cpu", "pack", "adc", "term", "pio", "uart", "spi", "tmr", "pwm", "net", "can", "rpc", "elua", "i2c" },
   refman_ps_lm3s = { "disp" },
-  refman_ps_str9 = { "pio", "rtc" },
-  refman_ps_mbed = { "pio" }
+  refman_ps_str9 = { "pio" },
+  refman_ps_mbed = { "pio" },
+  refman_ps_stm32 = { "enc" },
+  refman_ps_stm32f4 = { "enc" },
+  refman_ps_mizar32 = { "lcd", "rtc" },
 }
 
 -------------------------------------------------------------------------------
@@ -181,21 +184,32 @@ local function build_file( fname )
       return false, "funcs not found"
     end
     local funcs = r.funcs
-    page = page .. '<a name="funcs" /><h3>Functions</h3>\n<div class="docdiv">\n'
-    menu.funcs = {}
-    for i = 1, #funcs do
+    local functions_name = "<div class='functions'>" 
+    for _,f in pairs(funcs)do
+      functions_name = functions_name.."<a href='#"..namefromsig( f.sig ) .."'>"..namefromsig( f.sig ) .."</a> "
+    end
+
+    page = page .. '<a name="funcs" /><h3>Functions</h3>\n<div class="docdiv">\n'.. functions_name.."</div>\n"
+    
+    
+	menu.funcs = {}
+    
+	for i = 1, #funcs do
       local f = funcs[ i ]
       if not f.sig or not f.desc then
         return false, "function without sig or desc fields"
       end
       local funcname = namefromsig( f.sig )
-      if not funcname then
+
+	  if not funcname then
         return false, string.format( "'%s' should contain the function name between '*' chars", f.sig )
       end
-      menu.funcs[ #menu.funcs + 1 ] = funcname
+
+      --menu.funcs[ #menu.funcs + 1 ] = funcname
       -- signature
+	  
       page = page .. string.format( '<a name="%s" />', funcname )
-      page = page .. "<pre><code>" .. f.sig:gsub( '#', '' ) .. "</code></pre>"
+      page = page .. "<div class='function-block'><h2>" .. f.sig:gsub( '#', '' ) .. "</h2>\n"
       -- description
       page = page .. "\n<p>" .. dot( format_string( f.desc ) ) .. "</p>\n"
       -- arguments
@@ -229,7 +243,7 @@ local function build_file( fname )
       else
         page = page .. "nothing.</p>"
       end
-      page = page .. "\n\n"
+      page = page .. "\n\n</div>"
     end
     page = page .. "</div>\n"
 
@@ -293,11 +307,14 @@ local function gen_menu( fulldata, component, sect )
   end
 
   -- Functions
+  --[[
   sub[ #sub + 1 ] = { all_langs( function( x ) return getstr( "Functions", x ) end ), sf( "%s#funcs", relfname ), {} }
   local f_sub = sub[ #sub ][ submenu_idx ]
   for _, v in pairs( res.en.menu.funcs ) do
     f_sub[ #f_sub + 1 ] = { all_langs( function( x ) return v end ), sf( "%s#%s", relfname, name2link( v ) ) }
   end
+  ]]
+  sub[ #sub + 1 ] = { all_langs( function( x ) return getstr( "Functions", x ) end ), sf( "%s#funcs", relfname ) }
 
   -- Aux data (if needed)
   if res.en.menu.auxdata then

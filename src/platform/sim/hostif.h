@@ -3,6 +3,8 @@
 #ifndef __HOSTIO_H__
 #define __HOSTIO_H__
 
+#include "type.h"
+
 // Write a single character out to the screen.
 void hostif_putc(char c);
 
@@ -29,6 +31,12 @@ int hostif_write( int fd, const void *buf, unsigned count );
 
 // Close
 int hostif_close( int fd );
+
+// Seek
+long hostif_lseek( int fd, long pos, int whence );
+
+// Get time
+s64 hostif_gettime();
 
 #endif // __HOSTIO_H__
 

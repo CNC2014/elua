@@ -109,10 +109,10 @@ argument. The IP is given as a string.]],
       args =
       {
         "$port$ - the port to wait for connections from the remote system.",
-        [[$timer_id (optional)$ - the timer ID of the timer used to timeout the accept function after a specified time. If this is specified, $timeout$ must also
-be specified.]],
-        [[$timeout (optional)$ - the timeout after which the accept function returns if no connection was requested. If this is specified, $timer_id$ must also
-be specified.]]
+        [[$timer_id (optional)$ - the ID of the timer used for measuring the timeout. Use $nil$ or $tmr.SYS_TIMER$ to specify the @arch_platform_timers.html#the_system_timer@system timer@.]],
+       [[$timeout (optional)$ - timeout of the operation, can be either $net.NO_TIMEOUT$ or 0 for non-blocking operation, $net.INF_TIMEOUT$ for 
+blocking operation, or a positive number that specifies the timeout in microseconds. The default value of this argument is $unet.INF_TIMEOUT$.]],
+
       },
       ret =
       {
@@ -146,10 +146,9 @@ be specified.]]
   <li>$"*l"$: read a line (until the next '\n' character).</li>
   <li>$an integer$: read up to that many bytes.</li>
 </ul>]],
-        [[$timer_id (optional)$ - the timer ID of the timer used to timeout the recv function after a specified time. If this is specified, $timeout$ must also
-be specified.]],
-        [[$timeout (optional)$ - the timeout after which the recv function returns if no connection was requested. If this is specified, $timer_id$ must also
-be specified.]]
+        [[$timer_id (optional)$ - the ID of the timer used for measuring the timeout. Use $nil$ or $tmr.SYS_TIMER$ to specify the @arch_platform_timers.html#the_system_timer@system timer@.]],
+        [[$timeout (optional)$ - timeout of the operation, can be either $net.NO_TIMEOUT$ or 0 for non-blocking operation, $net.INF_TIMEOUT$ for 
+blocking operation, or a positive number that specifies the timeout in microseconds. The default value of this argument is $net.INF_TIMEOUT$.]],
       },
       ret =
       {
@@ -160,4 +159,3 @@ be specified.]]
   },
 }
 
-data_pt = data_en

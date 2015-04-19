@@ -22,7 +22,7 @@ You need to define the following macros for RFS:
 | RFS_BUFFER_SIZE     | Size of the RFS buffer. Needs to be one of the *BUF_SIZE_xxx* constants defined in _inc/buf.h_
 | RFS_UART_ID         | The ID of the UART that will be used by RFS. This is the physical connection over which the PC directory will be shared.
 | RFS_UART_SPEED      | Communication speed of the RFS UART interface. 
-| RFS_TIMER_ID        | The ID of a timer that will be used by RFS for internal operations
+| RFS_TIMER_ID        | The ID of a timer that will be used by RFS for internal operations. If not specified it defaults to the link:arch_platform_timers.html#the_system_timer[system timer].
 | RFS_FLOW_TYPE       | Flow control type on the serial RFS interface, see link:arch_platform_uart.html#flow_control_type[here] for details. 
 If not specified it defaults to \'no flow control'.
 | RFS_TIMEOUT         | RFS operations timeout (in microseconds). If during a RFS operation no data is received from the PC side for the
@@ -40,14 +40,13 @@ Windows 7 (32 bit) and Linux (Ubuntu 10.10 64 bit). To build it you need:
   Ubuntu Linux) and a gcc-based development environment under Windows. How to install a gcc-based development environment under Windows is
   beyond the scope of this tutorial, but check http://www.mingw.org/[here] and http://tdm-gcc.tdragon.net/[here] for possible solution
   (RFS server was compiled and tested under Win32 using the second soluation, the tdm gcc compiler).
-- scons. See link:building_win.html[here] for details on how to install scons on Windows, or link:building_unix.html[here] for details on how
-  to install scons on Linux.
+- the Lua based build system. See link:building.html[here] for more details.
 
 If the above requirements are met, building the RFS server is a simple matter of invoking this command from the eLua source tree base directory:
 
-----------------------
-scons -f rfs_server.py  
-----------------------
+------------------
+lua rfs_server.lua  
+------------------
 
 After this you should end up with a *rfs_server.exe* file in Windows or a *rfs_server* file in Linux. Running it without arguments prints
 the usage help:

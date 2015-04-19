@@ -14,6 +14,7 @@
 #include "genstd.h"
 #include "utils.h"
 #include "salloc.h"
+#include "shell.h"
 
 #ifdef USE_MULTIPLE_ALLOCATOR
 #include "dlmalloc.h"
@@ -21,13 +22,17 @@
 #include <malloc.h>
 #endif
 
+int open( const char *name, int flags, mode_t mode );
+int _kill( int pid, int sig );
+pid_t _getpid( void );
+
 // Utility function: look in the device manager table and find the index
 // for the given name. Returns an index into the device structure, -1 if error.
 // Also returns a pointer to the actual file name (without the device part)
 static int find_dm_entry( const char* name, char **pactname )
 {
   int i;
-  const DM_DEVICE* pdev;
+  const DM_INSTANCE_DATA* pinst;
   const char* preal;
   char tempname[ DM_MAX_DEV_NAME + 1 ];
   
@@ -54,8 +59,8 @@ static int find_dm_entry( const char* name, char **pactname )
   // Find device
   for( i = 0; i < dm_get_num_devices(); i ++ )
   {
-    pdev = dm_get_device_at( i );
-    if( !strcasecmp( tempname, pdev->name ) )
+    pinst = dm_get_instance_at( i );
+    if( !strcasecmp( tempname, pinst->name ) )
       break;
   }
   if( i == dm_get_num_devices() )
@@ -75,7 +80,7 @@ int _open_r( struct _reent *r, const char *name, int flags, int mode )
 {
   char* actname;
   int res, devid;
-  const DM_DEVICE* pdev;
+  const DM_INSTANCE_DATA *pinst;
  
   // Look for device, return error if not found or if function not implemented
   if( ( devid = find_dm_entry( name, &actname ) ) == -1 )
@@ -83,35 +88,45 @@ int _open_r( struct _reent *r, const char *name, int flags, int mode )
     r->_errno = ENODEV;
     return -1; 
   }
-  pdev = dm_get_device_at( devid );
-  if( pdev->p_open_r == NULL )
+  pinst = dm_get_instance_at( devid );
+  if( pinst->pdev->p_open_r == NULL )
   {
     r->_errno = ENOSYS;
     return -1;   
   }
   
   // Device found, call its function
-  if( ( res = pdev->p_open_r( r, actname, flags, mode ) ) < 0 )
+  if( ( res = pinst->pdev->p_open_r( r, actname, flags, mode, pinst->pdata ) ) < 0 )
     return res;
   return DM_MAKE_DESC( devid, res );
+}
+
+int open( const char *name, int flags, mode_t mode )
+{
+  return _open_r( _REENT, name, flags, 0 );
 }
 
 // *****************************************************************************
 // _close_r
 int _close_r( struct _reent *r, int file )
 {
-  const DM_DEVICE* pdev;
+  const DM_INSTANCE_DATA* pinst;
   
   // Find device, check close function
-  pdev = dm_get_device_at( DM_GET_DEVID( file ) );
-  if( pdev->p_close_r == NULL )
+  pinst = dm_get_instance_at( DM_GET_DEVID( file ) );
+  if( pinst->pdev->p_close_r == NULL )
   {
     r->_errno = ENOSYS;
     return -1; 
   }
   
   // And call the close function
-  return pdev->p_close_r( r, DM_GET_FD( file ) );
+  return pinst->pdev->p_close_r( r, DM_GET_FD( file ), pinst->pdata );
+}
+
+int close( int file )
+{
+  return _close_r( _REENT, file );
 }
 
 // *****************************************************************************
@@ -131,58 +146,191 @@ int _fstat_r( struct _reent *r, int file, struct stat *st )
 // _lseek_r
 off_t _lseek_r( struct _reent *r, int file, off_t off, int whence )
 {
-  const DM_DEVICE* pdev;
+  const DM_INSTANCE_DATA* pinst;
   
   // Find device, check close function
-  pdev = dm_get_device_at( DM_GET_DEVID( file ) );
-  if( pdev->p_lseek_r == NULL )
+  pinst = dm_get_instance_at( DM_GET_DEVID( file ) );
+  if( pinst->pdev->p_lseek_r == NULL )
   {
     r->_errno = ENOSYS;
     return -1; 
   }
   
   // And call the close function
-  return pdev->p_lseek_r( r, DM_GET_FD( file ), off, whence );
+  return pinst->pdev->p_lseek_r( r, DM_GET_FD( file ), off, whence, pinst->pdata );
 }
 
 // *****************************************************************************
 // _read_r 
 _ssize_t _read_r( struct _reent *r, int file, void *ptr, size_t len )
 {
-  const DM_DEVICE* pdev;
+  const DM_INSTANCE_DATA* pinst;
   
   // Find device, check read function
-  pdev = dm_get_device_at( DM_GET_DEVID( file ) );
-  if( pdev->p_read_r == NULL )
+  pinst = dm_get_instance_at( DM_GET_DEVID( file ) );
+  if( pinst->pdev->p_read_r == NULL )
   {
     r->_errno = ENOSYS;
     return -1; 
   }
   
   // And call the read function
-  return pdev->p_read_r( r, DM_GET_FD( file ), ptr, len );  
+  return pinst->pdev->p_read_r( r, DM_GET_FD( file ), ptr, len, pinst->pdata );
+}
+
+_ssize_t read( int file, void *ptr, size_t len )
+{
+  return _read_r( _REENT, file, ptr, len );
 }
 
 // *****************************************************************************
 // _write_r 
 _ssize_t _write_r( struct _reent *r, int file, const void *ptr, size_t len )
 {
-  const DM_DEVICE* pdev;
+  const DM_INSTANCE_DATA *pinst;
   
   // Find device, check write function
-  pdev = dm_get_device_at( DM_GET_DEVID( file ) );
-  if( pdev->p_write_r == NULL )
+  pinst = dm_get_instance_at( DM_GET_DEVID( file ) );
+  if( pinst->pdev->p_write_r == NULL )
   {
     r->_errno = ENOSYS;
     return -1; 
   }
   
   // And call the write function
-  return pdev->p_write_r( r, DM_GET_FD( file ), ptr, len );  
+  return pinst->pdev->p_write_r( r, DM_GET_FD( file ), ptr, len, pinst->pdata );
+}
+
+_ssize_t write( int file, const void *ptr, size_t len )
+{
+  return _write_r( _REENT, file, ptr, len );
 }
 
 // ****************************************************************************
-// Miscalenous functions
+// _mkdir_r
+int _mkdir_r( struct _reent *r, const char *path, mkdir_mode_t mode )
+{
+  char* actname;
+  int devid;
+  const DM_INSTANCE_DATA *pinst;
+
+  // Look for device, return error if not found or if function not implemented
+  if( ( devid = find_dm_entry( path, &actname ) ) == -1 )
+  {
+    r->_errno = ENODEV;
+    return -1;
+  }
+  pinst = dm_get_instance_at( devid );
+  if( pinst->pdev->p_mkdir_r == NULL )
+  {
+    r->_errno = EPERM;
+    return -1;
+  }
+
+  // Device found, call its function
+  return pinst->pdev->p_mkdir_r( r, actname - 1, mode, pinst->pdata );
+}
+
+int mkdir( const char *path, mode_t mode )
+{
+  return _mkdir_r( _REENT, path, mode );
+}
+
+// ****************************************************************************
+// _unlink_r
+int _unlink_r( struct _reent *r, const char *fname )
+{
+  char* actname;
+  int devid;
+  const DM_INSTANCE_DATA *pinst;
+
+  // Look for device, return error if not found or if function not implemented
+  if( ( devid = find_dm_entry( fname, &actname ) ) == -1 )
+  {
+    r->_errno = ENODEV;
+    return -1;
+  }
+  pinst = dm_get_instance_at( devid );
+  if( pinst->pdev->p_unlink_r == NULL )
+  {
+    r->_errno = ENOSYS;
+    return -1;
+  }
+
+  // Device found, call its function
+  return pinst->pdev->p_unlink_r( r, actname, pinst->pdata );
+}
+
+int unlink( const char *path )
+{
+  return _unlink_r( _REENT, path );
+}
+
+// ****************************************************************************
+// rmdir
+
+int rmdir( const char *path )
+{  
+  char* actname;
+  int devid;
+  const DM_INSTANCE_DATA *pinst;
+
+  // Look for device, return error if not found or if function not implemented
+  if( ( devid = find_dm_entry( path, &actname ) ) == -1 )
+  {
+    _REENT->_errno = ENODEV;
+    return -1;
+  }
+  pinst = dm_get_instance_at( devid );
+  if( pinst->pdev->p_rmdir_r == NULL )
+  {
+    _REENT->_errno = ENOSYS;
+    return -1;
+  }
+
+  // Device found, call its function
+  return pinst->pdev->p_rmdir_r( _REENT, actname, pinst->pdata );
+}
+
+// ****************************************************************************
+// rename
+
+int _rename_r( struct _reent *r, const char *oldname, const char *newname )
+{  
+  char *actname_old, *actname_new;
+  int devid_old, devid_new;
+  const DM_INSTANCE_DATA *pinst;
+
+  // Look for device, return error if not found or if function not implemented
+  if( ( devid_old = find_dm_entry( oldname, &actname_old ) ) == -1 )
+  {
+    r->_errno = ENODEV;
+    return -1;
+  }
+  if( ( devid_new = find_dm_entry( newname, &actname_new ) ) == -1 )
+  {
+    r->_errno = ENODEV;
+    return -1;
+  }
+  if( devid_old == devid_new )
+  {
+    pinst = dm_get_instance_at( devid_old );
+    if( pinst->pdev->p_rename_r == NULL )
+    {
+      r->_errno = EPERM;
+      return -1;
+    }
+
+    // Device found, call its function
+    return pinst->pdev->p_rename_r( r, actname_old, actname_new, pinst->pdata );
+  }
+  // Cannot rename between different devices (EXDEV)
+  r->_errno = EXDEV;
+  return -1;
+}
+
+// ****************************************************************************
+// Miscellaneous functions
 
 int _isatty_r( struct _reent* r, int fd )
 {
@@ -198,13 +346,13 @@ int isatty( int fd )
 #include <sys/types.h>
 #include <unistd.h>
 
-pid_t _getpid()
+pid_t _getpid( void )
 {
   return 0;
 }
 
 // For some very strange reason, the next function is required by the i386 platform...
-pid_t getpid()
+pid_t getpid( void )
 {
   return 0;
 }
@@ -213,12 +361,6 @@ pid_t getpid()
 clock_t _times_r( struct _reent* r, struct tms *buf )
 {
   return 0;
-}
-
-int _unlink_r( struct _reent *r, const char *name )
-{
-  r->_errno = ENOSYS;
-  return -1;
 }
 
 int _link_r( struct _reent *r, const char *c1, const char *c2 )
@@ -254,11 +396,24 @@ int _vfprintf_r( struct _reent *r, FILE *stream, const char *format, va_list ap 
   return _vfiprintf_r( r, stream, format, ap );
 }
 
+extern int _svfiprintf_r( struct _reent *r, FILE *stream, const char *format, va_list ap );
+int _svfprintf_r( struct _reent *r, FILE *stream, const char *format, va_list ap )
+{
+  return _svfiprintf_r( r, stream, format, ap );
+}
+
 extern int __svfiscanf_r(struct _reent *,FILE *, _CONST char *,va_list);
 int __svfscanf_r( struct _reent *r, FILE *stream, const char *format, va_list ap )
 {
   return __svfiscanf_r( r, stream, format, ap );
 }
+
+extern int __ssvfiscanf_r(struct _reent *,FILE *, _CONST char *,va_list);
+int __ssvfscanf_r( struct _reent *r, FILE *stream, const char *format, va_list ap )
+{
+  return __ssvfiscanf_r( r, stream, format, ap );
+}
+
 #endif // #ifdef LUA_NUMBER_INTEGRAL
 
 // ****************************************************************************
@@ -313,7 +468,7 @@ void* _sbrk_r( struct _reent* r, ptrdiff_t incr )
 } 
 
 // mallinfo()
-struct mallinfo mallinfo()
+struct mallinfo mallinfo( void )
 {
 #ifdef USE_MULTIPLE_ALLOCATOR
   return dlmallinfo();
@@ -367,7 +522,7 @@ void std_set_get_func( p_std_get_char pfunc )
 {
 }
 
-const DM_DEVICE* std_get_desc()
+const DM_DEVICE* std_get_desc( void )
 {
   return NULL;
 }
@@ -375,7 +530,7 @@ const DM_DEVICE* std_get_desc()
 #endif // #if !defined( BUILD_CON_GENERIC ) && !defined( BUILD_CON_TCP )
 
 // ****************************************************************************
-// memcpy is broken on AVR32's Newlib, so impolement a simple version here
+// memcpy is broken on AVR32's Newlib, so implement a simple version here
 // same goes for strcmp apparently
 #ifdef FORAVR32
 void* memcpy( void *dst, const void* src, size_t len )

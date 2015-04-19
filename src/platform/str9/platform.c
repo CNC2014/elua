@@ -24,13 +24,26 @@
 #include "buf.h"
 #include "elua_adc.h"
 #include "91x_adc.h"
+#include "91x_ssp.h"
+#include "91x_can.h"
+#include "utils.h"
 
 // ****************************************************************************
 // Platform initialization
 const GPIO_TypeDef* port_data[] = { GPIO0, GPIO1, GPIO2, GPIO3, GPIO4, GPIO5, GPIO6, GPIO7, GPIO8, GPIO9 };
+#ifndef VTMR_TIMER_ID
+#error Define VTMR_TIMER_ID to the ID of the timer used for the system timer
+#endif
 const TIM_TypeDef* str9_timer_data[] = { TIM0, TIM1, TIM2, TIM3 };
 
+// System timer implementation on STR9 uses one of the physical timers (defined by
+// VTMR_TIMER_ID). This is the same timer used for VTMR implementation. Its base
+// frequency is set to 1MHz in platform_s_timer_set_match_int. It runs at 16Hz
+// since this gives an exact number of microseconds (62500) before its overflow.
+
 static void platform_setup_adcs();
+
+static void cans_init();
 
 static void platform_config_scu()
 {     
@@ -51,6 +64,8 @@ static void platform_config_scu()
   SCU_PCLKDivisorConfig(SCU_PCLK_Div2);
   /* Set the HCLK Clock to MCLK */
   SCU_HCLKDivisorConfig(SCU_HCLK_Div1);
+  /* Set the BRCLK Clock to MCLK */
+  SCU_BRCLKDivisorConfig(SCU_BRCLK_Div1);
   
   // Enable VIC clock
   SCU_AHBPeriphClockConfig(__VIC, ENABLE);
@@ -80,6 +95,12 @@ static void platform_config_scu()
   
   // Enable the ADC clocks
   SCU_APBPeriphClockConfig(__ADC, ENABLE);
+
+  // Enable the SSP clocks
+  SCU_APBPeriphClockConfig(__SSP0,ENABLE);
+  SCU_APBPeriphReset(__SSP0,DISABLE);
+  SCU_APBPeriphClockConfig(__SSP1,ENABLE);
+  SCU_APBPeriphReset(__SSP1,DISABLE);
 }
 
 // Port/pin definitions of the eLua UART connection for different boards
@@ -100,16 +121,18 @@ static void platform_gpio_uart_setup()
 {
   GPIO_InitTypeDef GPIO_InitStructure;
 
-  GPIO_StructInit( &GPIO_InitStructure );
   // RX
+  GPIO_StructInit( &GPIO_InitStructure );
   GPIO_InitStructure.GPIO_Direction = GPIO_PinInput;
   GPIO_InitStructure.GPIO_Pin = uart_pin_data[ UART_RX_IDX ]; 
-  GPIO_InitStructure.GPIO_Type = GPIO_Type_PushPull ;
   GPIO_InitStructure.GPIO_IPConnected = GPIO_IPConnected_Enable;
   GPIO_InitStructure.GPIO_Alternate = GPIO_InputAlt1  ;
   GPIO_Init( ( GPIO_TypeDef* )uart_port_data[ UART_RX_IDX ], &GPIO_InitStructure );
   // TX
+  GPIO_StructInit( &GPIO_InitStructure );
+  GPIO_InitStructure.GPIO_Direction=GPIO_PinOutput;
   GPIO_InitStructure.GPIO_Pin = uart_pin_data[ UART_TX_IDX ];
+  GPIO_InitStructure.GPIO_Type = GPIO_Type_PushPull ;
   GPIO_InitStructure.GPIO_Alternate = GPIO_OutputAlt3  ;
   GPIO_Init( ( GPIO_TypeDef* )uart_port_data[ UART_TX_IDX ], &GPIO_InitStructure );
 }
@@ -142,15 +165,22 @@ int platform_init()
     TIM_CounterCmd( base, TIM_START );
   }
   
+ cmn_platform_init();
+
 #ifdef BUILD_ADC
   // Setup ADCs
   platform_setup_adcs();
 #endif
-  
-  cmn_platform_init();
-#ifdef VTMR_TIMER_ID
-  platform_s_timer_set_match_int( VTMR_TIMER_ID, 1000000 / VTMR_FREQ_HZ, PLATFORM_TIMER_INT_CYCLIC );
+
+#ifdef BUILD_CAN
+  // Setup CANs
+  cans_init();
 #endif
+
+  // Initialize system timer
+  cmn_systimer_set_base_freq( 1000000 );
+  cmn_systimer_set_interrupt_freq( VTMR_FREQ_HZ );
+  platform_s_timer_set_match_int( VTMR_TIMER_ID, 1000000 / VTMR_FREQ_HZ, PLATFORM_TIMER_INT_CYCLIC );
   return PLATFORM_OK;
 }
 
@@ -269,7 +299,7 @@ void platform_s_uart_send( unsigned id, u8 data )
   while( UART_GetFlagStatus( p_uart, UART_FLAG_TxFIFOFull ) != RESET );  
 }
 
-int platform_s_uart_recv( unsigned id, s32 timeout )
+int platform_s_uart_recv( unsigned id, timer_data_type timeout )
 {
   UART_TypeDef* p_uart = ( UART_TypeDef* )uarts[ id ];
 
@@ -318,7 +348,7 @@ static u32 platform_timer_set_clock( unsigned id, u32 clock )
   return baseclk / bestdiv;
 }
 
-void platform_s_timer_delay( unsigned id, u32 delay_us )
+void platform_s_timer_delay( unsigned id, timer_data_type delay_us )
 {
   TIM_TypeDef* base = ( TIM_TypeDef* )str9_timer_data[ id ];  
   u32 freq;
@@ -339,7 +369,7 @@ void platform_s_timer_delay( unsigned id, u32 delay_us )
   while( TIM_GetCounterValue( base ) < final );  
 }
       
-u32 platform_s_timer_op( unsigned id, int op, u32 data )
+timer_data_type platform_s_timer_op( unsigned id, int op, timer_data_type data )
 {
   u32 res = 0;
   TIM_TypeDef* base = ( TIM_TypeDef* )str9_timer_data[ id ];  
@@ -357,14 +387,6 @@ u32 platform_s_timer_op( unsigned id, int op, u32 data )
       res = TIM_GetCounterValue( base );
       break;
       
-    case PLATFORM_TIMER_OP_GET_MAX_DELAY:
-      res = platform_timer_get_diff_us( id, 0, 0xFFFF );
-      break;
-      
-    case PLATFORM_TIMER_OP_GET_MIN_DELAY:
-      res = platform_timer_get_diff_us( id, 0, 1 );
-      break;      
-      
     case PLATFORM_TIMER_OP_SET_CLOCK:
       res = platform_timer_set_clock( id, data );
       break;
@@ -372,15 +394,19 @@ u32 platform_s_timer_op( unsigned id, int op, u32 data )
     case PLATFORM_TIMER_OP_GET_CLOCK:
       res = platform_timer_get_clock( id );
       break;
+
+    case PLATFORM_TIMER_OP_GET_MAX_CNT:
+      res = 0xFFFF;
+      break;
   }
   return res;
 }
 
-int platform_s_timer_set_match_int( unsigned id, u32 period_us, int type )
+int platform_s_timer_set_match_int( unsigned id, timer_data_type period_us, int type )
 {
   TIM_TypeDef* base = ( TIM_TypeDef* )str9_timer_data[ id ];  
   u32 freq;
-  timer_data_type final;
+  u64 final;
   TIM_InitTypeDef TIM_InitStructure;
 
   if( period_us == 0 )
@@ -405,7 +431,7 @@ int platform_s_timer_set_match_int( unsigned id, u32 period_us, int type )
   TIM_InitStructure.TIM_Clock_Source = TIM_CLK_APB;         
   TIM_InitStructure.TIM_Clock_Edge = TIM_CLK_EDGE_FALLING;  
   TIM_InitStructure.TIM_Prescaler = TIM_GetPrescalerValue( base );
-  TIM_InitStructure.TIM_Pulse_Length_1 = final;          
+  TIM_InitStructure.TIM_Pulse_Length_1 = ( u16 )final;          
   TIM_Init( base, &TIM_InitStructure );
   str9_timer_int_periodic_flag[ id ] = type;
 
@@ -415,6 +441,32 @@ int platform_s_timer_set_match_int( unsigned id, u32 period_us, int type )
   TIM_ITConfig( base, TIM_IT_OC1, ENABLE );
 
   return PLATFORM_TIMER_INT_OK;
+}
+
+u64 platform_timer_sys_raw_read()
+{
+  TIM_TypeDef* base = ( TIM_TypeDef* )str9_timer_data[ VTMR_TIMER_ID ];
+
+  return TIM_GetCounterValue( base );
+}
+
+void platform_timer_sys_enable_int()
+{
+  TIM_TypeDef* base = ( TIM_TypeDef* )str9_timer_data[ VTMR_TIMER_ID ];
+
+  TIM_ITConfig( base, TIM_IT_OC1, ENABLE );
+}
+
+void platform_timer_sys_disable_int()
+{
+  TIM_TypeDef* base = ( TIM_TypeDef* )str9_timer_data[ VTMR_TIMER_ID ];
+
+  TIM_ITConfig( base, TIM_IT_OC1, DISABLE );
+}
+
+timer_data_type platform_timer_read_sys()
+{
+  return cmn_systimer_get();
 }
 
 // *****************************************************************************
@@ -459,18 +511,18 @@ void ADC_IRQHandler( void )
     
       // Fill in smoothing buffer until warmed up
       if ( s->logsmoothlen > 0 && s->smooth_ready == 0)
-	adc_smooth_data( s->id );
+        adc_smooth_data( s->id );
 #if defined( BUF_ENABLE_ADC )
       else if ( s->reqsamples > 1 )
       {
-	buf_write( BUF_ID_ADC, s->id, ( t_buf_data* )s->value_ptr );
-	s->value_fresh = 0;
+        buf_write( BUF_ID_ADC, s->id, ( t_buf_data* )s->value_ptr );
+        s->value_fresh = 0;
       }
 #endif
 
       // If we have the number of requested samples, stop sampling
       if ( adc_samples_available( s->id ) >= s->reqsamples && s->freerunning == 0 )
-	platform_adc_stop( s->id );
+        platform_adc_stop( s->id );
 
       d->seq_ctr++;
     }
@@ -513,12 +565,12 @@ static void platform_setup_adcs()
 
   ADC_ITConfig(ADC_IT_ECV, ENABLE);
 
-  platform_adc_setclock( 0, 0 );
+  platform_adc_set_clock( 0, 0 );
 }
 
 
 // NOTE: On this platform, there is only one ADC, clock settings apply to the whole device
-u32 platform_adc_setclock( unsigned id, u32 frequency )
+u32 platform_adc_set_clock( unsigned id, u32 frequency )
 {
   elua_adc_dev_state *d = adc_get_dev_state( 0 );
   
@@ -647,7 +699,7 @@ u32 platform_pwm_setup( unsigned id, u32 frequency, unsigned duty )
   return base / div;
 }
 
-static u32 platform_pwm_set_clock( unsigned id, u32 clock )
+u32 platform_pwm_set_clock( unsigned id, u32 clock )
 {
   TIM_TypeDef* p_timer = ( TIM_TypeDef* )str9_timer_data[ id ];
   u32 base = ( SCU_GetPCLKFreqValue() * 1000 );
@@ -657,31 +709,25 @@ static u32 platform_pwm_set_clock( unsigned id, u32 clock )
   return base / div;
 }
 
-u32 platform_pwm_op( unsigned id, int op, u32 data )
+u32 platform_pwm_get_clock( unsigned id )
 {
-  u32 res = 0;
   TIM_TypeDef* p_timer = ( TIM_TypeDef* )str9_timer_data[ id ];
 
-  switch( op )
-  {
-    case PLATFORM_PWM_OP_START:
-      TIM_CounterCmd( p_timer, TIM_START );
-      break;
+  return ( SCU_GetPCLKFreqValue() * 1000 ) / ( TIM_GetPrescalerValue( p_timer ) + 1 );
+}
 
-    case PLATFORM_PWM_OP_STOP:
-      TIM_CounterCmd( p_timer, TIM_STOP );
-      break;
+void platform_pwm_start( unsigned id )
+{
+  TIM_TypeDef* p_timer = ( TIM_TypeDef* )str9_timer_data[ id ];
 
-    case PLATFORM_PWM_OP_SET_CLOCK:
-      res = platform_pwm_set_clock( id, data );
-      break;
+  TIM_CounterCmd( p_timer, TIM_START );
+}
 
-    case PLATFORM_PWM_OP_GET_CLOCK:
-      res = ( SCU_GetPCLKFreqValue() * 1000 ) / ( TIM_GetPrescalerValue( p_timer ) + 1 );
-      break;
-  }
+void platform_pwm_stop( unsigned id )
+{
+  TIM_TypeDef* p_timer = ( TIM_TypeDef* )str9_timer_data[ id ];
 
-  return res;
+  TIM_CounterCmd( p_timer, TIM_STOP );
 }
 
 // ****************************************************************************
@@ -786,33 +832,304 @@ int platform_i2c_recv_byte( unsigned id, int ack )
 }
 
 // ****************************************************************************
-// Platform specific modules go here
+// CAN
+#if defined( BUILD_CAN )
+static canmsg RxCanMsg;
+static canmsg TxCanMsg;
+static GPIO_InitTypeDef    GPIO_InitStructure;
+static CAN_InitTypeDef     CAN_InitStructure;
 
-#define MIN_OPT_LEVEL 2
-#include "lrodefs.h"
-extern const LUA_REG_TYPE str9_pio_map[];
+static vu32 frame_received_flag = 0;
 
-const LUA_REG_TYPE platform_map[] =
-{
-#if LUA_OPTIMIZE_MEMORY > 0
-  { LSTRKEY( "pio" ), LROVAL( str9_pio_map ) },
-#endif
-  { LNILKEY, LNILVAL }
+/* used message object numbers */
+enum {
+  CAN_TX_STD_MSGOBJ = 0,
+  CAN_TX_EXT_MSGOBJ = 1,
+  CAN_RX_STD_MSGOBJ = 2,
+  CAN_RX_EXT_MSGOBJ = 3
 };
 
-LUALIB_API int luaopen_platform( lua_State *L )
+/*******************************************************************************
+* Function Name  : CAN_IRQHandler
+* Description    : This function handles the CAN interrupt request
+* Input          : None
+* Output         : None
+* Return         : None
+*******************************************************************************/
+void CAN_IRQHandler(void)
 {
-#if LUA_OPTIMIZE_MEMORY > 0
-  return 0;
-#else // #if LUA_OPTIMIZE_MEMORY > 0
-  luaL_register( L, PS_LIB_TABLE_NAME, platform_map );
+  u32 msgobj = 0;
 
-  // Setup the new tables inside platform table
-  lua_newtable( L );
-  luaL_register( L, NULL, str9_pio_map );
-  lua_setfield( L, -2, "pio" );
+  if(CAN->IDR == 0x8000)	/* status interrupt */
+    (void)CAN->SR;	/* read the status register to clear*/
+  else if(CAN->IDR >= 1 && CAN->IDR <= 32)
+  {
+    /* get the message object number that caused the interrupt to occur */
+    switch(msgobj = CAN->IDR - 1)
+    {
+      case  0: case 1:/* CAN_TX_MSGOBJ */
+        CAN_ReleaseTxMessage(msgobj);
+      	break;
 
-  return 1;
-#endif // #if LUA_OPTIMIZE_MEMORY > 0
+      default:
+        CAN_ReceiveMessage(msgobj, FALSE, &RxCanMsg);
+      	CAN_ReleaseRxMessage(msgobj);
+      	frame_received_flag = 1;
+        break;
+    }
+  }
+  /*write any value to VIC0 VAR*/  
+  VIC0->VAR = 0xFF;
+}
+
+void cans_init( void )
+{
+  SCU_APBPeriphClockConfig(__CAN, ENABLE);
+  SCU_APBPeriphReset(__CAN, DISABLE); 
+
+#ifdef ELUA_BOARD_STRE912
+ /* P3.3 alternate input 1, CAN_RX pin 61*/
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin=GPIO_Pin_3;
+  GPIO_InitStructure.GPIO_Direction=GPIO_PinInput;
+  GPIO_InitStructure.GPIO_IPConnected=GPIO_IPConnected_Enable;
+  GPIO_InitStructure.GPIO_Alternate=GPIO_InputAlt1;
+  GPIO_Init(GPIO3,&GPIO_InitStructure);
+
+  /* P3.2 alternate output 2, CAN_TX pin 60*/
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin=GPIO_Pin_2;
+  GPIO_InitStructure.GPIO_Direction=GPIO_PinOutput;
+  GPIO_InitStructure.GPIO_Type=GPIO_Type_PushPull;
+  GPIO_InitStructure.GPIO_Alternate=GPIO_OutputAlt2;
+  GPIO_Init(GPIO3,&GPIO_InitStructure);
+#else // STR9-comStick
+ /* P5.0 alternate input 1, CAN_RX pin 12*/
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin=GPIO_Pin_0;
+  GPIO_InitStructure.GPIO_Direction=GPIO_PinInput;
+  GPIO_InitStructure.GPIO_IPConnected=GPIO_IPConnected_Enable;
+  GPIO_InitStructure.GPIO_Alternate=GPIO_InputAlt1;
+  GPIO_Init(GPIO5,&GPIO_InitStructure);
+
+  /* P5.1 alternate output 2, CAN_TX pin 18*/
+  GPIO_StructInit(&GPIO_InitStructure);
+  GPIO_InitStructure.GPIO_Pin=GPIO_Pin_1;
+  GPIO_InitStructure.GPIO_Direction=GPIO_PinOutput;
+  GPIO_InitStructure.GPIO_Type=GPIO_Type_PushPull;
+  GPIO_InitStructure.GPIO_Alternate=GPIO_OutputAlt2;
+  GPIO_Init(GPIO5,&GPIO_InitStructure);
+#endif
+}
+
+u32 platform_can_setup( unsigned id, u32 clock )
+{
+  //Timing input values
+  const u8 tseg1 = 2;
+  const u8 tseg2 = 1;
+  const u8 sjw = 4;
+
+  //PCLK clock
+  u32 fclk = SCU_GetPCLKFreqValue();
+
+  //Baud Rate Prescaler
+  //Check 'The insider's guide to the STR91x ARM 9'
+  //Section 4.13.2.1 Bit Timing
+  u32 brp = 1000 * fclk / clock / (1 + tseg1 + tseg2);
+
+  /* initialize the CAN, interrupts enabled */
+  CAN_InitStructure.CAN_ConfigParameters=CAN_CR_IE;
+  CAN_Init(&CAN_InitStructure);
+
+  //Set Can Timing
+  CAN_EnterInitMode(CAN_CR_CCE | CAN_InitStructure.CAN_ConfigParameters);
+  CAN_SetTiming(tseg1, tseg2, sjw, brp);
+  CAN_LeaveInitMode();
+
+  //Set message objects 
+  CAN_SetUnusedAllMsgObj();
+  CAN_SetTxMsgObj(CAN_TX_STD_MSGOBJ, CAN_STD_ID, DISABLE);
+  CAN_SetTxMsgObj(CAN_TX_EXT_MSGOBJ, CAN_EXT_ID, DISABLE);
+  CAN_SetRxMsgObj(CAN_RX_STD_MSGOBJ, CAN_STD_ID, 0, CAN_LAST_STD_ID, TRUE);
+  CAN_SetRxMsgObj(CAN_RX_EXT_MSGOBJ, CAN_EXT_ID, 0, CAN_LAST_EXT_ID, TRUE);
+
+  return clock;
+}
+
+int platform_can_send( unsigned id, u32 canid, u8 idtype, u8 len, const u8 *data )
+{
+  TxCanMsg.IdType = idtype;
+  TxCanMsg.Id = canid;
+  TxCanMsg.Dlc = len;
+  memcpy(TxCanMsg.Data, data, len);
+  if ( CAN_SendMessage((idtype & ELUA_CAN_ID_EXT) ? CAN_TX_EXT_MSGOBJ : CAN_TX_STD_MSGOBJ, &TxCanMsg) == SUCCESS )
+    return PLATFORM_OK;
+  return PLATFORM_ERR;
+}
+
+int platform_can_recv( unsigned id, u32 *canid, u8 *idtype, u8 *len, u8 *data )
+{
+  // wait for a message
+  if ( frame_received_flag != 0){
+    *canid = ( u32 ) RxCanMsg.Id;
+    *idtype = RxCanMsg.IdType;
+    *len = RxCanMsg.Dlc;
+    memcpy( data, RxCanMsg.Data, *len );
+    frame_received_flag = 0;
+    return PLATFORM_OK;
+  }
+  else
+    return PLATFORM_UNDERFLOW;
+}
+#endif
+
+// ****************************************************************************
+// SPI
+
+#define SPI_MAX_PRESCALER     ( 254 * 256 )
+#define SPI_MIN_PRESCALER     2
+
+u32 platform_spi_setup( unsigned id, int mode, u32 clock, unsigned cpol, unsigned cpha, unsigned databits )
+{
+  const u32 basefreq = CPU_FREQUENCY;
+  u32 prescaler, divider = 1, temp, mindiff = 0xFFFFFFFF, minp;
+  GPIO_InitTypeDef  GPIO_InitStructure;
+  SSP_InitTypeDef SSP_InitStructure;
+
+  clock = UMIN( clock, basefreq >> 1 );
+  prescaler = UMIN( basefreq / clock, SPI_MAX_PRESCALER );
+  if( basefreq / prescaler > clock )
+    prescaler ++;
+  if( prescaler & 1 )
+    prescaler ++;
+  if( prescaler > 254 )
+  {
+    temp = prescaler;
+    for( prescaler = minp = 2; prescaler <= 254; prescaler += 2 )
+    {
+      divider = temp / prescaler;
+      if( divider <= 255 )
+      {
+        if( ABSDIFF( divider * prescaler, temp ) < mindiff )
+        {
+          mindiff = ABSDIFF( divider * prescaler, temp );
+          minp = prescaler;
+          if( mindiff == 0 )
+            break;
+        }
+      }
+    }
+    prescaler = minp;
+    divider = temp / prescaler;
+  }
+
+  if ( id == 0 )
+  {
+    // GPIO setup
+    // Fixed assignment:
+    // P2.4 - SCLK
+    // P2.5 - MOSI
+    // P2.6 - MISO
+    // P2.7 - CS
+    GPIO_InitStructure.GPIO_Direction = GPIO_PinOutput;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_4 | GPIO_Pin_5;
+    GPIO_InitStructure.GPIO_Type = GPIO_Type_PushPull;
+    GPIO_InitStructure.GPIO_Alternate = GPIO_OutputAlt2;
+    GPIO_Init(GPIO2, &GPIO_InitStructure);
+    GPIO_InitStructure.GPIO_Direction = GPIO_PinInput;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_6;
+    GPIO_InitStructure.GPIO_IPConnected = GPIO_IPConnected_Enable;
+    GPIO_InitStructure.GPIO_Alternate = GPIO_InputAlt1  ;
+    GPIO_Init(GPIO2, &GPIO_InitStructure);
+
+    // Actual SPI setup
+    SSP_DeInit(SSP0);
+    SSP_InitStructure.SSP_FrameFormat = SSP_FrameFormat_Motorola;
+    SSP_InitStructure.SSP_Mode = SSP_Mode_Master;
+    SSP_InitStructure.SSP_CPOL = cpol == 0 ? SSP_CPOL_Low : SSP_CPOL_High;
+    SSP_InitStructure.SSP_CPHA = cpha == 0 ? SSP_CPHA_1Edge : SSP_CPHA_2Edge;
+    SSP_InitStructure.SSP_DataSize = databits - 1;
+    SSP_InitStructure.SSP_ClockRate = divider - 1;
+    SSP_InitStructure.SSP_ClockPrescaler = prescaler;
+    SSP_Init(SSP0, &SSP_InitStructure);
+
+    // Enable peripheral   
+    SSP_Cmd(SSP0, ENABLE);
+  }
+  else if ( id == 1 )
+  {
+    // GPIO setup
+    // Fixed assignment:
+    // P1.0 - SCLK
+    // P1.1 - MOSI
+    // P1.2 - MISO
+    // P1.3 - CS
+    GPIO_InitStructure.GPIO_Direction = GPIO_PinOutput;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_0;
+    GPIO_InitStructure.GPIO_Type = GPIO_Type_PushPull;
+    GPIO_InitStructure.GPIO_Alternate = GPIO_OutputAlt3;
+    GPIO_Init(GPIO1, &GPIO_InitStructure);
+	
+    GPIO_InitStructure.GPIO_Direction = GPIO_PinOutput;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_1 | GPIO_Pin_3;
+    GPIO_InitStructure.GPIO_Type = GPIO_Type_PushPull;
+    GPIO_InitStructure.GPIO_Alternate = GPIO_OutputAlt3;
+    GPIO_Init(GPIO1, &GPIO_InitStructure);
+	
+    GPIO_InitStructure.GPIO_Direction = GPIO_PinInput;
+    GPIO_InitStructure.GPIO_Pin = GPIO_Pin_2;
+    GPIO_InitStructure.GPIO_IPConnected = GPIO_IPConnected_Enable;
+    GPIO_InitStructure.GPIO_Alternate = GPIO_InputAlt1;
+    GPIO_Init(GPIO1, &GPIO_InitStructure);
+
+    // Actual SPI setup
+    SSP_DeInit(SSP1);
+    SSP_InitStructure.SSP_FrameFormat = SSP_FrameFormat_Motorola;
+    SSP_InitStructure.SSP_Mode = SSP_Mode_Master;
+    SSP_InitStructure.SSP_CPOL = cpol == 0 ? SSP_CPOL_Low : SSP_CPOL_High;
+    SSP_InitStructure.SSP_CPHA = cpha == 0 ? SSP_CPHA_1Edge : SSP_CPHA_2Edge;
+    SSP_InitStructure.SSP_DataSize = databits - 1;
+    SSP_InitStructure.SSP_ClockRate = divider - 1;
+    SSP_InitStructure.SSP_ClockPrescaler = prescaler;
+    SSP_Init(SSP1, &SSP_InitStructure);
+
+    // Enable peripheral   
+    SSP_Cmd(SSP1, ENABLE);
+  }
+  
+  // All done
+  return basefreq / ( prescaler * divider );
+}
+
+spi_data_type platform_spi_send_recv( unsigned id, spi_data_type data )
+{
+  if (id == 0)
+  {
+    // Send byte through the SSP0 peripheral
+    SSP0->DR = data;
+    // Loop while Transmit FIFO is full
+    while(SSP_GetFlagStatus(SSP0, SSP_FLAG_TxFifoEmpty) == RESET);
+    // Loop while Receive FIFO is empty
+    while(SSP_GetFlagStatus(SSP0, SSP_FLAG_RxFifoNotEmpty) == RESET); 
+    // Return the byte read from the SSP bus
+    return SSP0->DR;  
+  }
+  else
+  {
+    // Send byte through the SSP1 peripheral
+    SSP1->DR = data;
+    // Loop while Transmit FIFO is full
+    while(SSP_GetFlagStatus(SSP1, SSP_FLAG_TxFifoEmpty) == RESET);
+    // Loop while Receive FIFO is empty
+    while(SSP_GetFlagStatus(SSP1, SSP_FLAG_RxFifoNotEmpty) == RESET); 
+    // Return the byte read from the SSP bus
+    return SSP1->DR;  
+  }
+}
+
+void platform_spi_select( unsigned id, int is_select )
+{
+  id = id;
+  is_select = is_select;
 }
 

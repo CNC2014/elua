@@ -41,15 +41,37 @@ extern void EthernetIntHandler();
 extern void SysTickIntHandler();
 extern void ADCIntHandler();
 extern void UARTIntHandler();
-extern void CANIntHandler();
+
 
 #include "hw_memmap.h"
 #include "platform_conf.h"
 
+#if defined( BUILD_CAN )
+extern void CANIntHandler();
+#endif
+
 extern void uart0_handler();
 extern void uart1_handler();
 extern void uart2_handler();
+extern void gpioa_handler();
+extern void gpiob_handler();
+extern void gpioc_handler();
+extern void gpiod_handler();
+extern void gpioe_handler();
+extern void gpiof_handler();
+extern void gpiog_handler();
+extern void gpioh_handler();
+extern void gpioj_handler();
+extern void tmr0_handler();
+extern void tmr1_handler();
+extern void tmr2_handler();
+extern void tmr3_handler();
+#if defined( BUILD_USB_CDC )
+extern void USB0DeviceIntHandler(void);
+#endif
 
+// From platform.c
+extern const u32 uart_base[];
 
 //*****************************************************************************
 //
@@ -84,11 +106,11 @@ void (* const g_pfnVectors[])(void) =
     0,                                      // Reserved
     IntDefaultHandler,                      // The PendSV handler
     SysTickIntHandler,                      // The SysTick handler
-    IntDefaultHandler,                      // GPIO Port A
-    IntDefaultHandler,                      // GPIO Port B
-    IntDefaultHandler,                      // GPIO Port C
-    IntDefaultHandler,                      // GPIO Port D
-    IntDefaultHandler,                      // GPIO Port E
+    gpioa_handler,                          // GPIO Port A
+    gpiob_handler,                          // GPIO Port B
+    gpioc_handler,                          // GPIO Port C
+    gpiod_handler,                          // GPIO Port D
+    gpioe_handler,                          // GPIO Port E
 #if defined( BUILD_C_INT_HANDLERS ) || defined( BUILD_LUA_INT_HANDLERS )
     uart0_handler,                          // UART0 Rx and Tx
 #else
@@ -118,35 +140,58 @@ void (* const g_pfnVectors[])(void) =
     IntDefaultHandler,                      // ADC Sequence 3
 #endif
     IntDefaultHandler,                      // Watchdog timer
-    IntDefaultHandler,                      // Timer 0 subtimer A
+    tmr0_handler,                           // Timer 0 subtimer A
     IntDefaultHandler,                      // Timer 0 subtimer B
-    IntDefaultHandler,                      // Timer 1 subtimer A
+    tmr1_handler,                           // Timer 1 subtimer A
     IntDefaultHandler,                      // Timer 1 subtimer B
-    IntDefaultHandler,                      // Timer 2 subtimer A
+    tmr2_handler,                           // Timer 2 subtimer A
     IntDefaultHandler,                      // Timer 2 subtimer B
     IntDefaultHandler,                      // Analog Comparator 0
     IntDefaultHandler,                      // Analog Comparator 1
     IntDefaultHandler,                      // Analog Comparator 2
     IntDefaultHandler,                      // System Control (PLL, OSC, BO)
     IntDefaultHandler,                      // FLASH Control
-    IntDefaultHandler,                      // GPIO Port F
-    IntDefaultHandler,                      // GPIO Port G
-    IntDefaultHandler,                      // GPIO Port H
+    gpiof_handler,                          // GPIO Port F
+    gpiog_handler,                          // GPIO Port G
+    gpioh_handler,                          // GPIO Port H
 #if defined( BUILD_C_INT_HANDLERS ) || defined( BUILD_LUA_INT_HANDLERS )
     uart2_handler,                          // UART2 Rx and Tx
 #else    
     IntDefaultHandler,                      // UART2 Rx and Tx
 #endif    
     IntDefaultHandler,                      // SSI1 Rx and Tx
-    IntDefaultHandler,                      // Timer 3 subtimer A
+    tmr3_handler,                           // Timer 3 subtimer A
     IntDefaultHandler,                      // Timer 3 subtimer B
     IntDefaultHandler,                      // I2C1 Master and Slave
     IntDefaultHandler,                      // Quadrature Encoder 1
+#if defined( BUILD_CAN )
     CANIntHandler,                          // CAN0
+#else
+    IntDefaultHandler,                      // CAN0
+#endif
     IntDefaultHandler,                      // CAN1
     IntDefaultHandler,                      // CAN2
     EthernetIntHandler,                     // Ethernet
+#if defined( FORLM3S9B92 ) || defined( FORLM3S9D92 )
+    IntDefaultHandler,                      // Hibernate
+#if defined( BUILD_USB_CDC )
+    USB0DeviceIntHandler,                   // USB0
+#else // #if defined( BUILD_USB_CDC )
+    IntDefaultHandler,                      // USB0
+#endif // #if defined( BUILD_USB_CDC )
+    IntDefaultHandler,                      // PWM Generator 3
+    IntDefaultHandler,                      // uDMA Software Transfer
+    IntDefaultHandler,                      // uDMA Error
+    IntDefaultHandler,                      // ADC1 Sequence 0
+    IntDefaultHandler,                      // ADC1 Sequence 1
+    IntDefaultHandler,                      // ADC1 Sequence 2
+    IntDefaultHandler,                      // ADC1 Sequence 3
+    IntDefaultHandler,                      // I2S0
+    IntDefaultHandler,                      // External Bus Interface 0
+    gpioj_handler                           // GPIO Port J    
+#else // #if defined( FORLM3S9B92 ) || defined( FORLM3S9D92 )
     IntDefaultHandler                       // Hibernate
+#endif // #if defined( FORLM3S9B92 ) || defined( FORLM3S9D92 )
 };
 
 //*****************************************************************************
@@ -218,6 +263,8 @@ ResetISR(void)
 #include "sysctl.h"
 #include "uart.h"
 
+// FIXME: Assumes console is UART, will not be right for USB_CDC
+
 //*****************************************************************************
 //
 // This is the code that gets called when the processor receives a NMI.  This
@@ -228,12 +275,15 @@ ResetISR(void)
 static void
 NmiSR(void)
 {
+    MAP_UARTCharPut( uart_base[CON_UART_ID], 'N' );
+    MAP_UARTCharPut( uart_base[CON_UART_ID], 'M' );
+    MAP_UARTCharPut( uart_base[CON_UART_ID], 'I' );
     //
     // Enter an infinite loop.
     //
     while(1)
     {
-      UARTCharPut( UART0_BASE, '!' );
+      MAP_UARTCharPut( uart_base[CON_UART_ID], '!' );
     }
 }
 
@@ -250,11 +300,11 @@ FaultISR(void)
     //
     // Enter an infinite loop.
     //
-   UARTCharPut( UART0_BASE, '#' );
-   UARTCharPut( UART0_BASE, '#' );
-   UARTCharPut( UART0_BASE, '#' );
-   UARTCharPut( UART0_BASE, '#' );
-   UARTCharPut( UART0_BASE, '#' );
+   MAP_UARTCharPut( uart_base[CON_UART_ID], 'F' );
+   MAP_UARTCharPut( uart_base[CON_UART_ID], 'a' );
+   MAP_UARTCharPut( uart_base[CON_UART_ID], 'u' );
+   MAP_UARTCharPut( uart_base[CON_UART_ID], 'l' );
+   MAP_UARTCharPut( uart_base[CON_UART_ID], 't' );
    while(1)
    {
    }
@@ -270,11 +320,14 @@ FaultISR(void)
 static void
 IntDefaultHandler(void)
 {
+  MAP_UARTCharPut( uart_base[CON_UART_ID], 'I' );
+  MAP_UARTCharPut( uart_base[CON_UART_ID], 'n' );
+  MAP_UARTCharPut( uart_base[CON_UART_ID], 't' );
     //
     // Go into an infinite loop.
     //
     while(1)
     {
-      UARTCharPut( UART0_BASE, '*' );
+      MAP_UARTCharPut( uart_base[CON_UART_ID], '*' );
     }
 }

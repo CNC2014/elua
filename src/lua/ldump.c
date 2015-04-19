@@ -24,6 +24,7 @@ typedef struct {
  int strip;
  int status;
  DumpTargetInfo target;
+ size_t wrote;
 } DumpState;
 
 #define DumpMem(b,n,size,D)	DumpBlock(b,(n)*(size),D)
@@ -35,6 +36,7 @@ static void DumpBlock(const void* b, size_t size, DumpState* D)
  {
   lua_unlock(D->L);
   D->status=(*D->writer)(D->L,b,size,D->data);
+  D->wrote+=size;
   lua_lock(D->L);
  }
 }
@@ -45,13 +47,19 @@ static void DumpChar(int y, DumpState* D)
  DumpVar(x,D);
 }
 
+static void Align4(DumpState *D)
+{
+ while(D->wrote&3)
+  DumpChar(0,D);
+}
+
 static void MaybeByteSwap(char *number, size_t numbersize, DumpState *D)
 {
  int x=1;
  int platform_little_endian = *(char*)&x;
  if (platform_little_endian != D->target.little_endian)
  {
-  int i;
+  unsigned long i;
   for (i=0; i<numbersize/2; i++)
   {
    char temp = number[i];
@@ -91,7 +99,7 @@ static void DumpInt(int x, DumpState* D)
  DumpIntWithSize(x,D->target.sizeof_int,D);
 }
 
-static void DumpSize(int32_t x, DumpState* D)
+static void DumpSize(uint32_t x, DumpState* D)
 {
  /* dump unsigned integer */
  switch(D->target.sizeof_strsize_t) {
@@ -162,6 +170,7 @@ static void DumpCode(const Proto *f, DumpState* D)
  DumpInt(f->sizecode,D);
  char buf[10];
  int i;
+ Align4(D);
  for (i=0; i<f->sizecode; i++)
  {
   memcpy(buf,&f->code[i],sizeof(Instruction));
@@ -179,7 +188,7 @@ static void DumpString(const TString* s, DumpState* D)
  }
  else
  {
-  strsize_t size=s->tsv.len+1;		/* include trailing '\0' */
+  strsize_t size=( strsize_t )s->tsv.len+1;		/* include trailing '\0' */
   DumpSize(size,D);
   DumpBlock(getstr(s),size,D);
  }
@@ -223,6 +232,7 @@ static void DumpDebug(const Proto* f, DumpState* D)
  int i,n;
  n= (D->strip) ? 0 : f->sizelineinfo;
  DumpInt(n,D);
+ Align4(D);
  for (i=0; i<n; i++)
  {
   DumpInt(f->lineinfo[i],D);
@@ -288,6 +298,7 @@ int luaU_dump_crosscompile (lua_State* L, const Proto* f, lua_Writer w, void* da
  D.strip=strip;
  D.status=0;
  D.target=target;
+ D.wrote=0;
  DumpHeader(&D);
  DumpFunction(f,NULL,&D);
  return D.status;

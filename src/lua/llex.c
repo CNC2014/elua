@@ -1,5 +1,5 @@
 /*
-** $Id: llex.c,v 2.20.1.1 2007/12/27 13:02:25 roberto Exp $
+** $Id: llex.c,v 2.20.1.2 2009/11/23 14:58:22 roberto Exp $
 ** Lexical Analyzer
 ** See Copyright Notice in lua.h
 */
@@ -62,13 +62,6 @@ static void save (LexState *ls, int c) {
 
 
 void luaX_init (lua_State *L) {
-  int i;
-  for (i=0; i<NUM_RESERVED; i++) {
-    TString *ts = luaS_new(L, luaX_tokens[i]);
-    luaS_fix(ts);  /* reserved words are never collected */
-    lua_assert(strlen(luaX_tokens[i])+1 <= TOKEN_LEN);
-    ts->tsv.reserved = cast_byte(i+1);  /* reserved word */
-  }
 }
 
 
@@ -118,8 +111,10 @@ TString *luaX_newstring (LexState *ls, const char *str, size_t l) {
   lua_State *L = ls->L;
   TString *ts = luaS_newlstr(L, str, l);
   TValue *o = luaH_setstr(L, ls->fs->h, ts);  /* entry for `str' */
-  if (ttisnil(o))
+  if (ttisnil(o)) {
     setbvalue(o, 1);  /* make sure `str' will not be collected */
+    luaC_checkGC(L);
+  }
   return ts;
 }
 
@@ -420,17 +415,19 @@ static int llex (LexState *ls, SemInfo *seminfo) {
         else if (isalpha(ls->current) || ls->current == '_') {
           /* identifier or reserved word */
           TString *ts;
+          int i;
           do {
             save_and_next(ls);
           } while (isalnum(ls->current) || ls->current == '_');
+          /* look for reserved word */
+          save(ls, '\0');
+          for (i = 0; i < NUM_RESERVED; i++)
+            if (!strcmp(luaX_tokens[i], luaZ_buffer(ls->buff)))
+              return i + FIRST_RESERVED;
           ts = luaX_newstring(ls, luaZ_buffer(ls->buff),
-                                  luaZ_bufflen(ls->buff));
-          if (ts->tsv.reserved > 0)  /* reserved word? */
-            return ts->tsv.reserved - 1 + FIRST_RESERVED;
-          else {
-            seminfo->ts = ts;
-            return TK_NAME;
-          }
+                                  luaZ_bufflen(ls->buff) - 1);
+          seminfo->ts = ts;
+          return TK_NAME;
         }
         else {
           int c = ls->current;

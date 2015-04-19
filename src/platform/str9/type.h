@@ -1,6 +1,9 @@
 #ifndef __TYPE_H__
 #define __TYPE_H__
 
+#include <stdbool.h>
+enum { FALSE = 0, TRUE  = !FALSE };
+
 typedef unsigned char  BYTE;
 typedef unsigned short WORD;
 typedef unsigned long  DWORD;

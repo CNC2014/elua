@@ -1,6 +1,6 @@
 // Module for interfacing with the I2C interface
 
-#include "lua.h"
+//#include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
 #include "platform.h"
@@ -13,10 +13,12 @@
 static int i2c_setup( lua_State *L )
 {
   unsigned id = luaL_checkinteger( L, 1 );
-  u32 speed = ( u32 )luaL_checkinteger( L, 2 );
+  s32 speed = ( s32 )luaL_checkinteger( L, 2 );
 
   MOD_CHECK_ID( i2c, id );
-  lua_pushinteger( L, platform_i2c_setup( id, speed ) );
+  if (speed <= 0)
+    return luaL_error( L, "frequency must be > 0" );
+  lua_pushinteger( L, platform_i2c_setup( id, (u32)speed ) );
   return 1;
 }
 
@@ -40,15 +42,17 @@ static int i2c_stop( lua_State *L )
   return 0;
 }
 
-// Lua: i2c.address( id, address, direction )
+// Lua: status = i2c.address( id, address, direction )
 static int i2c_address( lua_State *L )
 {
   unsigned id = luaL_checkinteger( L, 1 );
-  u16 address = ( u16 )luaL_checkinteger( L, 2 );
+  int address = luaL_checkinteger( L, 2 );
   int direction = luaL_checkinteger( L, 3 );
 
   MOD_CHECK_ID( i2c, id );
-  lua_pushboolean( L, platform_i2c_send_address( id, address, direction ) );
+  if ( address < 0 || address > 127 )
+    return luaL_error( L, "slave address must be from 0 to 127" );
+  lua_pushboolean( L, platform_i2c_send_address( id, (u16)address, direction ) );
   return 1;
 }
 
@@ -68,11 +72,13 @@ static int i2c_write( lua_State *L )
     return luaL_error( L, "invalid number of arguments" );
   for( argn = 2; argn <= lua_gettop( L ); argn ++ )
   {
-    if( lua_isnumber( L, argn ) )
+    // lua_isnumber() would silently convert a string of digits to an integer
+    // whereas here strings are handled separately.
+    if( lua_type( L, argn ) == LUA_TNUMBER )
     {
       numdata = ( int )luaL_checkinteger( L, argn );
       if( numdata < 0 || numdata > 255 )
-        return luaL_error( L, "numeric data can be between 0 and 255" );
+        return luaL_error( L, "numeric data must be from 0 to 255" );
       if( platform_i2c_send_byte( id, numdata ) != 1 )
         break;
       wrote ++;
@@ -83,10 +89,10 @@ static int i2c_write( lua_State *L )
       for( i = 0; i < datalen; i ++ )
       {
         lua_rawgeti( L, argn, i + 1 );
-        numdata = luaL_checkinteger( L, -1 );
+        numdata = ( int )luaL_checkinteger( L, -1 );
         lua_pop( L, 1 );
         if( numdata < 0 || numdata > 255 )
-          return luaL_error( L, "numeric data can be between 0 and 255" );
+          return luaL_error( L, "numeric data must be from 0 to 255" );
         if( platform_i2c_send_byte( id, numdata ) == 0 )
           break;
       }
@@ -157,7 +163,7 @@ LUALIB_API int luaopen_i2c( lua_State *L )
 #else // #if LUA_OPTIMIZE_MEMORY > 0
   luaL_register( L, AUXLIB_I2C, i2c_map );
   
-  // Add the stop bits and parity constants (for uart.setup)
+  // Add the stop bits and parity constants (for i2c.setup)
   MOD_REG_NUMBER( L, "FAST", PLATFORM_I2C_SPEED_FAST );
   MOD_REG_NUMBER( L, "SLOW", PLATFORM_I2C_SPEED_SLOW ); 
   MOD_REG_NUMBER( L, "TRANSMITTER", PLATFORM_I2C_DIRECTION_TRANSMITTER );

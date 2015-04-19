@@ -20,8 +20,9 @@
 #include "lualib.h"
 #include "lrotable.h"
 
-
-
+#ifndef LUA_CROSS_COMPILER
+#include "platform_conf.h"
+#endif
 
 /*
 ** If your system does not support `stdout', you can just remove this function.
@@ -298,6 +299,8 @@ static int luaB_loadfile (lua_State *L) {
 */
 static const char *generic_reader (lua_State *L, void *ud, size_t *size) {
   (void)ud;  /* to avoid warnings */
+  if (L == NULL && size == NULL) // direct mode check, doesn't happen
+    return NULL;
   luaL_checkstack(L, 2, "too many nested functions");
   lua_pushvalue(L, 1);  /* get function */
   lua_call(L, 0, 1);  /* call it */
@@ -694,7 +697,7 @@ static void base_open (lua_State *L) {
 
 LUALIB_API int luaopen_base (lua_State *L) {
   base_open(L);
-#if LUA_OPTIMIZE_MEMORY == 0
+#if LUA_OPTIMIZE_MEMORY == 0 && defined( MODULE_LUA_CO_LINE )
   luaL_register(L, LUA_COLIBNAME, co_funcs);
   return 2;
 #else

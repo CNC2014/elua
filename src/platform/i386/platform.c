@@ -67,7 +67,7 @@ static void scr_write( int fd, char c )
   monitor_put( c );
 }
 
-static int kb_read( s32 to )
+static int kb_read( timer_data_type to )
 {
   int res;
 
@@ -150,7 +150,7 @@ void platform_s_uart_send( unsigned id, u8 data )
 {
 }
 
-int platform_s_uart_recv( unsigned id, s32 timeout )
+int platform_s_uart_recv( unsigned id, timer_data_type timeout )
 {
   return -1;
 }
@@ -163,11 +163,11 @@ int platform_s_uart_set_flow_control( unsigned id, int type )
 // ****************************************************************************
 // "Dummy" timer functions
 
-void platform_s_timer_delay( unsigned id, u32 delay_us )
+void platform_s_timer_delay( unsigned id, timer_data_type delay_us )
 {
 }
 
-u32 platform_s_timer_op( unsigned id, int op, u32 data )
+timer_data_type platform_s_timer_op( unsigned id, int op, timer_data_type data )
 {
  return 0;
 }
@@ -180,7 +180,7 @@ int platform_cpu_set_global_interrupts( int status )
   return 0;
 }
 
-int platform_cpu_get_global_interrupts()
+int platform_cpu_get_global_interrupts( void )
 {
   return 0;
 }
@@ -188,7 +188,7 @@ int platform_cpu_get_global_interrupts()
 // ****************************************************************************
 // Allocator support
 
-u32 platform_get_lastmem()
+u32 platform_get_lastmem( void )
 {
   return lastmem;
 }

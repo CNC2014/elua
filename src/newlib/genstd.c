@@ -16,7 +16,7 @@ static p_std_get_char std_get_char_func;
 int std_prev_char = -1;
 
 // 'read'
-static _ssize_t std_read( struct _reent *r, int fd, void* vptr, size_t len )
+static _ssize_t std_read( struct _reent *r, int fd, void* vptr, size_t len, void *pdata )
 {
   int i, c;
   char* ptr = ( char* )vptr;
@@ -43,15 +43,18 @@ static _ssize_t std_read( struct _reent *r, int fd, void* vptr, size_t len )
   i = 0;
   while( i < len )
   {  
+    // If we have a lookahead char from the previous run of std_read,
+    // process it now.
     if( std_prev_char != -1 )
     {
-      // We have a char from the previous run of std_read, so put it in the buffer
-      ptr[ i ++ ] = ( char )std_prev_char;
+      c = std_prev_char;
       std_prev_char = -1;
-      continue;
     }
-    if( ( c = std_get_char_func( STD_INFINITE_TIMEOUT ) ) == -1 )
-      break;
+    else
+    {
+      if( ( c = std_get_char_func( STD_INFINITE_TIMEOUT ) ) == -1 )
+        break;
+    }
     if( ( c == 8 ) || ( c == 0x7F ) ) // Backspace
     {
       if( i > 0 )
@@ -80,11 +83,11 @@ static _ssize_t std_read( struct _reent *r, int fd, void* vptr, size_t len )
     }
     ptr[ i ++ ] = c;
   }
-  return len;
+  return i;
 }
 
 // 'write'
-static _ssize_t std_write( struct _reent *r, int fd, const void* vptr, size_t len )
+static _ssize_t std_write( struct _reent *r, int fd, const void* vptr, size_t len, void *pdata )
 {   
   int i;
   const char* ptr = ( const char* )vptr;
@@ -131,7 +134,6 @@ void std_set_get_func( p_std_get_char pfunc )
 // Our UART device descriptor structure
 static const DM_DEVICE std_device = 
 {
-  STD_DEV_NAME,
   NULL,                 // open
   NULL,                 // close
   std_write,            // write
@@ -139,12 +141,17 @@ static const DM_DEVICE std_device =
   NULL,                 // lseek
   NULL,                 // opendir
   NULL,                 // readdir
-  NULL                  // closedir
+  NULL,                 // closedir
+  NULL,                 // getaddr
+  NULL,                 // mkdir
+  NULL,                 // unlink
+  NULL,                 // rmdir
+  NULL                  // rename
 };
 
-const DM_DEVICE* std_get_desc()
+int std_register()
 {
-  return &std_device;
+  return dm_register( STD_DEV_NAME, NULL, &std_device );
 }
 
 #endif // #ifdef BUILD_CON_GENERIC

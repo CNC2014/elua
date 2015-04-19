@@ -1,52 +1,30 @@
 // Common code for all backends
 
-#include "platform.h"
+#include "platform.h"		// platform_conf.h
 #include "platform_conf.h"
-#include "type.h"
 #include "genstd.h"
 #include "common.h"
-#include "buf.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <ctype.h>
 #include "math.h"
 #include "elua_adc.h"
 #include "term.h"
 #include "xmodem.h"
-#include "elua_int.h"
-#include "sermux.h"
+#include "lua.h"
+#include "lapi.h"
+#include "lauxlib.h"
 
-// [TODO] the new builder should automatically do this
-#if defined( BUILD_LUA_INT_HANDLERS ) || defined( BUILD_C_INT_HANDLERS )
-#define BUILD_INT_HANDLERS
-
-#ifndef INT_TMR_MATCH
-#define INT_TMR_MATCH         ELUA_INT_INVALID_INTERRUPT
-#endif
-
+#ifdef BUILD_INT_HANDLERS
 extern const elua_int_descriptor elua_int_table[ INT_ELUA_LAST ];
+#endif // #ifdef BUILD_INT_HANDLERS
 
-#endif // #if defined( BUILD_LUA_INT_HANDLERS ) || defined( BUILD_C_INT_HANDLERS )
-
-// [TODO] the new builder should automatically do this
-#ifndef VTMR_NUM_TIMERS
-#define VTMR_NUM_TIMERS       0
-#endif // #ifndef VTMR_NUM_TIMERS
-
-// [TODO] the new builder should automatically do this
 #ifndef CON_BUF_SIZE
 #define CON_BUF_SIZE          0
 #endif // #ifndef CON_BUF_SIZE
 
-// [TODO] the new builder should automatically do this
-#ifndef SERMUX_FLOW_TYPE
-#define SERMUX_FLOW_TYPE      PLATFORM_UART_FLOW_NONE
-#endif
-
-// [TODO] the new builder should automatically do this
-#ifndef CON_FLOW_TYPE
-#define CON_FLOW_TYPE        PLATFORM_UART_FLOW_NONE
-#endif
+static unsigned int skip_0A = 0;
 
 // ****************************************************************************
 // XMODEM support code
@@ -58,7 +36,7 @@ static void xmodem_send( u8 data )
   platform_uart_send( CON_UART_ID, data );
 }
 
-static int xmodem_recv( u32 timeout )
+static int xmodem_recv( timer_data_type timeout )
 {
   return platform_uart_recv( CON_UART_ID, CON_TIMER_ID, timeout );
 }
@@ -79,10 +57,23 @@ static void term_out( u8 data )
 
 static int term_in( int mode )
 {
-  if( mode == TERM_INPUT_DONT_WAIT )
-    return platform_uart_recv( CON_UART_ID, CON_TIMER_ID, 0 );
-  else
-    return platform_uart_recv( CON_UART_ID, CON_TIMER_ID, PLATFORM_UART_INFINITE_TIMEOUT );
+  int c;
+  do{
+    if( mode == TERM_INPUT_DONT_WAIT )
+      c = platform_uart_recv( CON_UART_ID, CON_TIMER_ID, 0 );
+    else
+      c = platform_uart_recv( CON_UART_ID, CON_TIMER_ID, PLATFORM_TIMER_INF_TIMEOUT );
+    // CR/LF sequence, skip the second char (LF) if applicable
+    if( skip_0A > 0 )
+    {
+      skip_0A=0;
+      if( c == 0x0A )
+        continue;
+    }
+    
+    break;
+  }while( TRUE );
+  return c;
 }
 
 static int term_translate( int data )
@@ -131,8 +122,11 @@ static int term_translate( int data )
   }
   else if( data == 0x0D )
   {
-    // CR/LF sequence, read the second char (LF) if applicable
-    platform_uart_recv( CON_UART_ID, CON_TIMER_ID, TERM_TIMEOUT );
+    skip_0A=1;
+    return KC_ENTER;
+  }
+  else if( data == 0x0A )
+  {
     return KC_ENTER;
   }
   else
@@ -178,7 +172,7 @@ static void uart_send( int fd, char c )
 #endif  
 }
 
-static int uart_recv( s32 to )
+static int uart_recv( timer_data_type to )
 {
 #if defined( CON_UART_ID )
   return platform_uart_recv( CON_UART_ID, CON_TIMER_ID, to );
@@ -187,7 +181,7 @@ static int uart_recv( s32 to )
 #endif  
 }
 
-void cmn_platform_init()
+void cmn_platform_init(void)
 {
 #ifdef BUILD_INT_HANDLERS
   platform_int_init();
@@ -207,16 +201,20 @@ void cmn_platform_init()
     platform_uart_set_buffer( i + SERMUX_SERVICE_ID_FIRST, bufsizes[ i ] );
 #endif // #ifdef BUILD_SERMUX
 
-#if defined( CON_UART_ID ) && CON_UART_ID < SERMUX_SERVICE_ID_FIRST
+#if defined( CON_UART_ID ) && ( CON_UART_ID < SERMUX_SERVICE_ID_FIRST ) && ( CON_UART_ID != CDC_UART_ID )
   // Setup console UART
   platform_uart_setup( CON_UART_ID, CON_UART_SPEED, 8, PLATFORM_UART_PARITY_NONE, PLATFORM_UART_STOPBITS_1 );  
   platform_uart_set_flow_control( CON_UART_ID, CON_FLOW_TYPE );
   platform_uart_set_buffer( CON_UART_ID, CON_BUF_SIZE );
 #endif // #if defined( CON_UART_ID ) && CON_UART_ID < SERMUX_SERVICE_ID_FIRST
 
+#if defined( BUILD_USB_CDC ) && defined( CDC_BUF_SIZE )
+  platform_uart_set_buffer( CDC_UART_ID, CDC_BUF_SIZE );
+#endif
+
   // Set the send/recv functions                          
   std_set_send_func( uart_send );
-  std_set_get_func( uart_recv );  
+  std_set_get_func( uart_recv );
 
 #ifdef BUILD_XMODEM  
   // Initialize XMODEM
@@ -234,7 +232,14 @@ void cmn_platform_init()
 
 int platform_pio_has_port( unsigned port )
 {
+#if defined( PIO_PINS_PER_PORT )
   return port < NUM_PIO;
+#elif defined( PIO_PIN_ARRAY )
+  const u8 pio_port_pins[] = PIO_PIN_ARRAY;
+  return port < NUM_PIO && pio_port_pins[ port ] != 0;
+#else
+  #error "You must define either PIO_PINS_PER_PORT of PIO_PIN_ARRAY in cpu header"
+#endif
 }
 
 const char* platform_pio_get_prefix( unsigned port )
@@ -253,7 +258,19 @@ int platform_pio_has_pin( unsigned port, unsigned pin )
   const u8 pio_port_pins[] = PIO_PIN_ARRAY;
   return port < NUM_PIO && pin < pio_port_pins[ port ];
 #else
-  #error "You must define either PIO_PINS_PER_PORT of PIO_PIN_ARRAY in platform_conf.h"
+  #error "You must define either PIO_PINS_PER_PORT of PIO_PIN_ARRAY in platform cpu.h"
+#endif
+}
+
+int platform_pio_get_num_pins( unsigned port )
+{
+#if defined( PIO_PINS_PER_PORT )
+  return PIO_PINS_PER_PORT;
+#elif defined( PIO_PIN_ARRAY )
+  const u8 pio_port_pins[] = PIO_PIN_ARRAY;
+  return pio_port_pins[ port ];
+#else
+  #error "You must define either PIO_PINS_PER_PORT of PIO_PIN_ARRAY in platform cpu.h"
 #endif
 }
 
@@ -285,7 +302,7 @@ int platform_pwm_exists( unsigned id )
 // ****************************************************************************
 // CPU functions
 
-u32 platform_cpu_get_frequency()
+u32 platform_cpu_get_frequency(void)
 {
   return CPU_FREQUENCY;
 }
@@ -300,47 +317,41 @@ int platform_adc_exists( unsigned id )
 
 #ifdef BUILD_ADC
 
-u32 platform_adc_op( unsigned id, int op, u32 data )
-{  
-  elua_adc_ch_state *s = adc_get_ch_state( id );
-  elua_adc_dev_state *d = adc_get_dev_state( 0 );
-  u32 res = 0;
-
-  switch( op )
-  {
-    case PLATFORM_ADC_GET_MAXVAL:
-      res = pow( 2, ADC_BIT_RESOLUTION ) - 1;
-      break;
-
-    case PLATFORM_ADC_SET_SMOOTHING:
-      res = adc_update_smoothing( id, ( u8 )intlog2( ( unsigned ) data ) );
-      break;
-      
-    case PLATFORM_ADC_SET_BLOCKING:
-      s->blocking = data;
-      break;
-      
-    case PLATFORM_ADC_IS_DONE:
-      res = ( s->op_pending == 0 );
-      break;
-    
-    case PLATFORM_ADC_OP_SET_TIMER:
-      if ( d->timer_id != data )
-        d->running = 0;
-      platform_adc_stop( id );
-      d->timer_id = data;
-      break;
-    
-    case PLATFORM_ADC_OP_SET_CLOCK:
-      res = platform_adc_setclock( id, data );
-      break;
-      
-    case PLATFORM_ADC_SET_FREERUNNING:
-      s->freerunning = data;
-      break;
-  }
-  return res;
+u32 platform_adc_get_maxval( unsigned id )
+{
+  return pow( 2, ADC_BIT_RESOLUTION ) - 1;
 }
+
+u32 platform_adc_set_smoothing( unsigned id, u32 length )
+{
+  return adc_update_smoothing( id, ( u8 )intlog2( ( unsigned ) length ) );
+}
+
+void platform_adc_set_blocking( unsigned id, u32 mode )
+{
+  adc_get_ch_state( id )->blocking = mode;
+}
+
+void platform_adc_set_freerunning( unsigned id, u32 mode )
+{
+  adc_get_ch_state( id )->freerunning = mode;
+}
+
+u32 platform_adc_is_done( unsigned id )
+{
+  return adc_get_ch_state( id )->op_pending == 0;
+}
+
+void platform_adc_set_timer( unsigned id, u32 timer )
+{
+  elua_adc_dev_state *d = adc_get_dev_state( 0 );
+
+  if ( d->timer_id != timer )
+    d->running = 0;
+  platform_adc_stop( id );
+  d->timer_id = timer;
+}
+
 #endif // #ifdef BUILD_ADC
 
 // ****************************************************************************
@@ -351,14 +362,23 @@ u32 platform_adc_op( unsigned id, int op, u32 data )
 
 extern char end[];
 
+// 'sim' and 'pc' have memory allocated dynamically at run time, as opposed to all
+// the other targets
+
+#if !defined( ELUA_BOARD_SIM ) && !defined( ELUA_BOARD_PC )
+#define ARRAYSPEC             static
+#else
+#define ARRAYSPEC
+#endif
+
 void* platform_get_first_free_ram( unsigned id )
 {
-  void* mstart[] = MEM_START_ADDRESS;
+  ARRAYSPEC u32 mstart[] = MEM_START_ADDRESS;
   u32 p;
 
-  if( id >= sizeof( mstart ) / sizeof( void* ) )
+  if( id >= sizeof( mstart ) / sizeof( u32 ) )
     return NULL;
-  p = ( u32 )mstart[ id ];
+  p = mstart[ id ];
   if( p & ( MIN_ALIGN - 1 ) )
     p = ( ( p >> MIN_ALIGN_SHIFT ) + 1 ) << MIN_ALIGN_SHIFT;
   return ( void* )p;
@@ -366,12 +386,12 @@ void* platform_get_first_free_ram( unsigned id )
 
 void* platform_get_last_free_ram( unsigned id )
 {
-  void* mend[] = MEM_END_ADDRESS;
+  ARRAYSPEC u32 mend[] = MEM_END_ADDRESS;
   u32 p;
 
-  if( id >= sizeof( mend ) / sizeof( void* ) )
+  if( id >= sizeof( mend ) / sizeof( u32 ) )
     return NULL;
-  p = ( u32 )mend[ id ];
+  p = mend[ id ];
   if( p & ( MIN_ALIGN - 1 ) )
     p = ( ( p >> MIN_ALIGN_SHIFT ) - 1 ) << MIN_ALIGN_SHIFT;
   return ( void* )p;
@@ -444,6 +464,125 @@ void cmn_int_handler( elua_int_id id, elua_int_resnum resnum )
 #endif // #ifdef BUILD_INT_HANDLERS
 
 // ****************************************************************************
+// Internal flash support functions (currently used only by WOFS)
+
+#if defined( BUILD_WOFS ) && !defined( ELUA_CPU_LINUX )
+
+// This symbol must be exported by the linker command file and must reflect the
+// TOTAL size of flash used by the eLua image (not only the code and constants,
+// but also .data and whatever else ends up in the eLua image). WOFS will start
+// at the next usable (aligned to a flash sector boundary) address after 
+// flash_used_size.
+extern char flash_used_size[];
+
+// Helper function: find the flash sector in which an address resides
+// Return the sector number, as well as the start and end address of the sector
+static u32 flashh_find_sector( u32 address, u32 *pstart, u32 *pend )
+{
+  address -= INTERNAL_FLASH_START_ADDRESS;
+#ifdef INTERNAL_FLASH_SECTOR_SIZE
+  // All the sectors in the flash have the same size, so just align the address
+  u32 sect_id = address / INTERNAL_FLASH_SECTOR_SIZE;
+
+  if( pstart )
+    *pstart = sect_id * INTERNAL_FLASH_SECTOR_SIZE + INTERNAL_FLASH_START_ADDRESS;
+  if( pend )
+    *pend = ( sect_id + 1 ) * INTERNAL_FLASH_SECTOR_SIZE + INTERNAL_FLASH_START_ADDRESS - 1;
+  return sect_id;
+#else // #ifdef INTERNAL_FLASH_SECTOR_SIZE
+  // The flash has blocks of different size
+  // Their size is decribed in the INTERNAL_FLASH_SECTOR_ARRAY macro
+  const u32 flash_sect_size[] = INTERNAL_FLASH_SECTOR_ARRAY;
+  u32 total = 0, i = 0;
+
+  while( ( total <= address ) && ( i < sizeof( flash_sect_size ) / sizeof( u32 ) ) )
+    total += flash_sect_size[ i ++ ];
+  if( pstart )
+    *pstart = ( total - flash_sect_size[ i - 1 ] ) + INTERNAL_FLASH_START_ADDRESS;
+  if( pend )
+    *pend = total + INTERNAL_FLASH_START_ADDRESS - 1;
+  return i - 1;
+#endif // #ifdef INTERNAL_FLASH_SECTOR_SIZE
+}
+
+u32 platform_flash_get_sector_of_address( u32 addr )
+{
+  return flashh_find_sector( addr, NULL, NULL );
+}
+
+u32 platform_flash_get_num_sectors(void)
+{
+#ifdef INTERNAL_FLASH_SECTOR_SIZE
+  return INTERNAL_FLASH_SIZE / INTERNAL_FLASH_SECTOR_SIZE;
+#else // #ifdef INTERNAL_FLASH_SECTOR_SIZE
+  const u32 flash_sect_size[] = INTERNAL_FLASH_SECTOR_ARRAY;
+
+  return sizeof( flash_sect_size ) / sizeof( u32 );
+#endif // #ifdef INTERNAL_FLASH_SECTOR_SIZE
+}
+
+u32 platform_flash_get_first_free_block_address( u32 *psect )
+{
+  // Round the total used flash size to the closest flash block address
+  u32 temp, sect;
+
+  sect = flashh_find_sector( ( u32 )flash_used_size + INTERNAL_FLASH_START_ADDRESS - 1, NULL, &temp );
+  if( psect )
+    *psect = sect + 1;
+  return temp + 1;
+}
+
+u32 platform_flash_write( const void *from, u32 toaddr, u32 size )
+{
+#ifndef INTERNAL_FLASH_WRITE_UNIT_SIZE
+  return platform_s_flash_write( from, toaddr, size );
+#else // #ifindef INTERNAL_FLASH_WRITE_UNIT_SIZE
+  u32 temp, rest, ssize = size;
+  unsigned i;
+  char tmpdata[ INTERNAL_FLASH_WRITE_UNIT_SIZE ];
+  const u8 *pfrom = ( const u8* )from;
+  const u32 blksize = INTERNAL_FLASH_WRITE_UNIT_SIZE;
+  const u32 blkmask = INTERNAL_FLASH_WRITE_UNIT_SIZE - 1;
+
+  // Align the start
+  if( toaddr & blkmask )
+  {
+    rest = toaddr & blkmask;
+    temp = toaddr & ~blkmask; // this is the actual aligned address
+    memcpy( tmpdata, ( const void* )temp, blksize );
+    for( i = rest; size && ( i < blksize ); i ++, size --, pfrom ++ )
+      tmpdata[ i ] = *pfrom;
+    platform_s_flash_write( tmpdata, temp, blksize );
+    if( size == 0 )
+      return ssize;
+    toaddr = temp + blksize;
+  }
+  // The start address is now a multiple of blksize
+  // Compute how many bytes we can write as multiples of blksize
+  rest = size & blkmask;
+  temp = size & ~blkmask;
+  // Program the blocks now
+  if( temp )
+  {
+    platform_s_flash_write( pfrom, toaddr, temp );
+    toaddr += temp;
+    pfrom += temp;
+  }
+  // And the final part of a block if needed
+  if( rest )
+  {
+    memcpy( tmpdata, ( const void* )toaddr, blksize );
+    for( i = 0; size && ( i < rest ); i ++, size --, pfrom ++ )
+      tmpdata[ i ] = *pfrom;
+    platform_s_flash_write( tmpdata, toaddr, blksize );
+  }
+  return ssize;
+#endif // #ifndef INTERNAL_FLASH_WRITE_UNIT_SIZE
+}
+
+#endif // #ifdef BUILD_WOFS
+
+// ****************************************************************************
 // Misc support
 
 unsigned int intlog2( unsigned int v )
@@ -455,5 +594,65 @@ unsigned int intlog2( unsigned int v )
     r++;
   }
   return r;
+}
+
+char lastchar( const char *s )
+{
+  unsigned len;
+
+  if( !s )
+    return '\0';
+  len = strlen( s );
+  if( len == 0 )
+    return '\0';
+  else
+    return s[ len - 1 ];
+}
+
+char firstchar( const char *s )
+{
+  return s ? s[ 0 ]: '\0';
+}
+
+// 64-bits integer printf support seems to be broken in some versions of Newlib...
+const char* cmn_str64( u64 x )
+{
+  static char nr[ 32 ];
+  u64 q, r;
+  unsigned l = 30;
+
+  memset( nr, 0, 32 );
+  do
+  {
+    q = x / 10;
+    r = x % 10;
+    nr[ l -- ] = r + '0';
+    x = q;
+  } while( x != 0 );
+  return nr + l + 1;
+}
+
+// Read a timeout spec from the user and return it
+// The timeout spec has the format [timer_id, timeout]. Both arguments are optional: 
+// If none is specified -> defaults to infinite timeout
+// If timer_id is specified, but timeout is not specified -> defaults to infinite timeout
+// If timeout is PLATFORM_TIMER_INF_TIMEOUT -> also infinite timeout (independent of timer_id)
+// If both are specified -> wait the specified timeout on the specified timer_id
+// If timer_id is 'nil' the system timer will be used
+void cmn_get_timeout_data( lua_State *L, int pidx, unsigned *pid, timer_data_type *ptimeout )
+{
+  lua_Number tempn;
+
+  *ptimeout = PLATFORM_TIMER_INF_TIMEOUT; 
+  *pid = ( unsigned )luaL_optinteger( L, pidx, PLATFORM_TIMER_SYS_ID );
+  if( lua_type( L, pidx + 1 ) == LUA_TNUMBER )
+  {
+    tempn = lua_tonumber( L, pidx + 1 );
+    if( tempn < 0 || tempn > PLATFORM_TIMER_INF_TIMEOUT )
+      luaL_error( L, "invalid timeout value" );
+    *ptimeout = ( timer_data_type )tempn;
+  }
+  if( *pid == PLATFORM_TIMER_SYS_ID && !platform_timer_sys_available() )
+    luaL_error( L, "the system timer is not implemented on this platform" );
 }
 

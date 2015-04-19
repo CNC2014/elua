@@ -3,7 +3,7 @@
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
-#include "platform.h"
+#include "type.h"
 #include "auxmods.h"
 #include "lrotable.h"
 #include <string.h>
@@ -45,7 +45,7 @@ static int bitarray_new( lua_State *L )
   if( lua_isnumber( L, 1 ) )
   {
     // capacity, [element_size_bits], [fill]
-    capacity = luaL_checkinteger( L, 1 );
+    capacity = ( u32 )luaL_checkinteger( L, 1 );
     if( lua_isnumber( L, 2 ) )
       elsize = luaL_checkinteger( L, 2 );
     else
@@ -67,9 +67,11 @@ static int bitarray_new( lua_State *L )
       elsize = luaL_checkinteger( L, 2 );
     else
       elsize = 8;
+    if( elsize == 0 )
+      return luaL_error( L, "length is zero." );
     if( ( temp << 3 ) % elsize )
       return luaL_error( L, "length is not a multiple of element size." );
-    capacity = ( temp << 3 ) / elsize;  
+    capacity = ( u32 )( temp << 3 ) / elsize;  
   }
   else 
     return luaL_error( L, "invalid arguments." );
@@ -141,7 +143,7 @@ static int bitarray_get( lua_State *L )
   u32 idx;
    
   pa = bitarray_check( L );
-  idx = luaL_checkinteger( L, 2 );
+  idx = ( u32 )luaL_checkinteger( L, 2 );
   if( ( idx <= 0 ) || ( idx > pa->capacity ) )
     return luaL_error( L, "invalid index." );
   lua_pushinteger( L, bitarray_getval( pa, idx ) );    
@@ -156,8 +158,8 @@ static int bitarray_set( lua_State *L )
   u8 rest, mask;
    
   pa = bitarray_check( L );
-  idx = luaL_checkinteger( L, 2 );
-  newval = luaL_checkinteger( L, 3 );
+  idx = ( u32 )luaL_checkinteger( L, 2 );
+  newval = ( u32 )luaL_checkinteger( L, 3 );
   if( ( idx <= 0 ) || ( idx > pa->capacity ) )
     return luaL_error( L, "invalid index." );
   idx --;
@@ -175,15 +177,15 @@ static int bitarray_set( lua_State *L )
     switch( pa->elsize )
     {
       case 8:
-        pa->values[ idx ] = val;;
+        pa->values[ idx ] = ( u8 )newval;
         break;
         
       case 16:
-        *( ( u16* )pa->values + idx ) = val;
+        *( ( u16* )pa->values + idx ) = ( u16 )newval;
         break;
         
       case 32:
-        *( ( u32* )pa->values + idx ) = val;
+        *( ( u32* )pa->values + idx ) = ( u32 )newval;
         break;  
     }    
   return 0;
@@ -206,7 +208,7 @@ static int bitarray_iter( lua_State *L )
   u32 idx;
   
   pa = bitarray_check( L );
-  idx = luaL_checkinteger( L, 2 ) + 1;
+  idx = ( u32 )luaL_checkinteger( L, 2 ) + 1;
   if( idx <= pa->capacity )
   {
     lua_pushinteger( L, idx );

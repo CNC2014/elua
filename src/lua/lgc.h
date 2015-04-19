@@ -66,6 +66,7 @@
 ** bit 4 - for tables: has weak values
 ** bit 5 - object is fixed (should not be collected)
 ** bit 6 - object is "super" fixed (only the main thread)
+** bit 7 - object is (partially) stored in read-only memory
 */
 
 
@@ -78,6 +79,7 @@
 #define VALUEWEAKBIT	4
 #define FIXEDBIT	5
 #define SFIXEDBIT	6
+#define READONLYBIT 7
 #define WHITEBITS	bit2mask(WHITE0BIT, WHITE1BIT)
 
 
@@ -123,6 +125,7 @@ LUAI_FUNC void luaC_callGCTM (lua_State *L);
 LUAI_FUNC void luaC_freeall (lua_State *L);
 LUAI_FUNC void luaC_step (lua_State *L);
 LUAI_FUNC void luaC_fullgc (lua_State *L);
+LUAI_FUNC int luaC_sweepstrgc (lua_State *L);
 LUAI_FUNC void luaC_marknew (lua_State *L, GCObject *o);
 LUAI_FUNC void luaC_link (lua_State *L, GCObject *o, lu_byte tt);
 LUAI_FUNC void luaC_linkupval (lua_State *L, UpVal *uv);

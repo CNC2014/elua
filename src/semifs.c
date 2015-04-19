@@ -1,9 +1,7 @@
 // Filesystem implementation
 #include "swi.h"
-#include "type.h"
 #include <string.h>
 #include <errno.h>
-#include "devman.h"
 #include <stdio.h>
 #include "ioctl.h"
 #include "semifs.h"
@@ -39,7 +37,7 @@ __semihost(int reason, void * arg)
        : "=r" (value) /* Outputs */
        : "r" (reason), "r" (arg), "i" (AngelSWI) /* Inputs */
        : "r0", "r1", "r2", "r3", "ip", "lr", "memory", "cc"
-		/* Clobbers r0 and r1, and lr if in supervisor mode */);
+                /* Clobbers r0 and r1, and lr if in supervisor mode */);
                 /* Accordingly to page 13-77 of ARM DUI 0040D other registers
                    can also be clobbered.  Some memory positions may also be
                    changed by a system call, so they should not be kept in
@@ -58,7 +56,7 @@ static int semifs_find_empty_fd()
   return -1;
 }
 
-static int semifs_open_r( struct _reent *r, const char *path, int flags, int mode )
+static int semifs_open_r( struct _reent *r, const char *path, int flags, int mode, void *pdata )
 {
   int aflags = 0, fd, fh;
   uint32_t args[3];
@@ -101,7 +99,7 @@ static int semifs_open_r( struct _reent *r, const char *path, int flags, int mod
   return fd;
 }
 
-static int semifs_close_r( struct _reent *r, int fd )
+static int semifs_close_r( struct _reent *r, int fd, void *pdata )
 {
   int fh = semifs_fd_table[ fd ].handle;
    
@@ -113,7 +111,7 @@ static int semifs_close_r( struct _reent *r, int fd )
   return __semihost(SYS_CLOSE, &fh);
 }
 
-static _ssize_t semifs_write_r( struct _reent *r, int fd, const void* ptr, size_t len )
+static _ssize_t semifs_write_r( struct _reent *r, int fd, const void* ptr, size_t len, void *pdata )
 {
   int fh = semifs_fd_table[ fd ].handle, x;
   uint32_t args[3];
@@ -135,7 +133,7 @@ static _ssize_t semifs_write_r( struct _reent *r, int fd, const void* ptr, size_
   return len - x;
 }
 
-static _ssize_t semifs_read_r( struct _reent *r, int fd, void* ptr, size_t len )
+static _ssize_t semifs_read_r( struct _reent *r, int fd, void* ptr, size_t len, void *pdata )
 {
   int fh = semifs_fd_table[ fd ].handle, x;
   uint32_t args[3];
@@ -157,7 +155,7 @@ static _ssize_t semifs_read_r( struct _reent *r, int fd, void* ptr, size_t len )
   return len - x;
 }
 
-static off_t semifs_lseek_r( struct _reent *r, int fd, off_t off, int whence )
+static off_t semifs_lseek_r( struct _reent *r, int fd, off_t off, int whence, void *pdata )
 {
   int fh = semifs_fd_table[ fd ].handle, res;  
   uint32_t args[2];
@@ -168,7 +166,7 @@ static off_t semifs_lseek_r( struct _reent *r, int fd, off_t off, int whence )
     case SEEK_CUR:
       // seek from current position
       if (fd == SEMIFS_MAX_FDS)
-	return -1;
+        return -1;
       off  += semifs_fd_table[ fd ].pos;
       whence = SEEK_SET;
       break;
@@ -212,7 +210,7 @@ static int xffind(const char *pattern, XFINFO *info)
 // opendir
 char testpattern[] = "*";
 SEARCHINFO semifs_dir;
-static void* semifs_opendir_r( struct _reent *r, const char* dname )
+static void* semifs_opendir_r( struct _reent *r, const char* dname, void *pdata )
 {
   semifs_dir.file_info.fileID = 0;
   semifs_dir.pattern = testpattern;
@@ -222,7 +220,7 @@ static void* semifs_opendir_r( struct _reent *r, const char* dname )
 // readdir
 extern struct dm_dirent dm_shared_dirent;
 extern char dm_shared_fname[ DM_MAX_FNAME_LENGTH + 1 ];
-static struct dm_dirent* semifs_readdir_r( struct _reent *r, void *d )
+static struct dm_dirent* semifs_readdir_r( struct _reent *r, void *d, void *pdata )
 {
   SEARCHINFO *dir = ( SEARCHINFO* )d;
   XFINFO *semifs_file_info = &dir->file_info;
@@ -237,19 +235,19 @@ static struct dm_dirent* semifs_readdir_r( struct _reent *r, void *d )
   pent->fname = dm_shared_fname;
   pent->fsize = semifs_file_info->size;
   pent->ftime = 0; // need to convert from struct to UNIX time?!
+  pent->flags = 0;
   return pent;
 }
 
 // closedir
-static int semifs_closedir_r( struct _reent *r, void *d )
+static int semifs_closedir_r( struct _reent *r, void *d, void *pdata )
 {
   return 0;
 }
 
 // Semihosting device descriptor structure
-static DM_DEVICE semifs_device =
+static const DM_DEVICE semifs_device =
 {
-  "/semi",
   semifs_open_r,         // open
   semifs_close_r,        // close
   semifs_write_r,        // write
@@ -257,24 +255,29 @@ static DM_DEVICE semifs_device =
   semifs_lseek_r,        // lseek
   semifs_opendir_r,      // opendir
   semifs_readdir_r,      // readdir
-  semifs_closedir_r       // closedir
+  semifs_closedir_r,     // closedir
+  NULL,                  // getaddr
+  NULL,                  // mkdir
+  NULL,                  // unlink
+  NULL,                  // rmdir                   
+  NULL                   // rename
 };
 
-const DM_DEVICE* semifs_init()
+int semifs_init()
 {
   int i;
 
   for (i = 0; i < SEMIFS_MAX_FDS; i ++)
     semifs_fd_table[i].handle = -1;
 
-  return &semifs_device;
+  return dm_register( "/semi", NULL, &semifs_device );
 }
 
 #else // #ifdef BUILD_SEMIFS
 
-const DM_DEVICE* semifs_init()
+int semifs_init()
 {
-  return NULL;
+  return dm_register( NULL, NULL, NULL );
 }
 
 #endif // #ifdef BUILD_SEMIFS

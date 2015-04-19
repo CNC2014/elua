@@ -27,6 +27,9 @@
 #include "lpc17xx_clkpwr.h"
 #include "lpc17xx_pwm.h"
 #include "lpc17xx_adc.h"
+#include "lpc17xx_can.h"
+
+#define SYSTICKHZ             10
 
 // ****************************************************************************
 // Platform initialization
@@ -34,6 +37,7 @@
 static void platform_setup_timers();
 static void platform_setup_pwm();
 static void platform_setup_adcs();
+static void cans_init( void );
 
 int platform_init()
 {
@@ -43,13 +47,13 @@ int platform_init()
   // DeInit NVIC and SCBNVIC
   NVIC_DeInit();
   NVIC_SCBDeInit();
-	
+
   // Configure the NVIC Preemption Priority Bits:
   // two (2) bits of preemption priority, six (6) bits of sub-priority.
   // Since the Number of Bits used for Priority Levels is five (5), so the
   // actual bit number of sub-priority is three (3)
   NVIC_SetPriorityGrouping(0x05);
-	
+
   //  Set Vector table offset value
 #if (__RAM_MODE__==1)
   NVIC_SetVTOR(0x10000000);
@@ -66,11 +70,37 @@ int platform_init()
   platform_setup_adcs();
 #endif
 
+  // Setup CANs
+  cans_init();
+
+  // System timer setup
+  cmn_systimer_set_base_freq( mbed_get_cpu_frequency() );
+  cmn_systimer_set_interrupt_freq( SYSTICKHZ );
+
+  // Enable SysTick
+  SysTick_Config( mbed_get_cpu_frequency() / SYSTICKHZ );
+
   // Common platform initialization code
   cmn_platform_init();
 
   return PLATFORM_OK;
 } 
+
+extern u32 SystemCoreClock;
+u32 mbed_get_cpu_frequency()
+{
+  return SystemCoreClock;
+}
+
+// SysTick interrupt handler
+void SysTick_Handler()
+{
+  // Handle virtual timers
+  cmn_virtual_timer_cb();
+
+  // Handle system timer call
+  cmn_systimer_periodic();
+}
 
 // ****************************************************************************
 // PIO section
@@ -79,7 +109,6 @@ int platform_init()
 pio_type platform_pio_op( unsigned port, pio_type pinmask, int op )
 {
   pio_type retval = 1;
-  u32 idx = 0;
   
   switch( op )
   {
@@ -134,18 +163,17 @@ pio_type platform_pio_op( unsigned port, pio_type pinmask, int op )
 // The other UARTs have assignable Rx/Tx pins and thus have to be configured
 // by the user
 
-static LPC_UART_TypeDef *uart[] = { LPC_UART0, LPC_UART1, LPC_UART2, LPC_UART3 };
+static LPC_UART_TypeDef* const uart[] = { LPC_UART0, LPC_UART1, LPC_UART2, LPC_UART3 };
 
 u32 platform_uart_setup( unsigned id, u32 baud, int databits, int parity, int stopbits )
 {
-  u32 temp;
   // UART Configuration structure variable
   UART_CFG_Type UARTConfigStruct;
   // UART FIFO configuration Struct variable
   UART_FIFO_CFG_Type UARTFIFOConfigStruct;
   // Pin configuration for UART0
   PINSEL_CFG_Type PinCfg;
-	
+
   // UART0 Pin Config
   PinCfg.Funcnum = 1;
   PinCfg.OpenDrain = 0;
@@ -155,7 +183,7 @@ u32 platform_uart_setup( unsigned id, u32 baud, int databits, int parity, int st
   PINSEL_ConfigPin(&PinCfg);
   PinCfg.Pinnum = 3;
   PINSEL_ConfigPin(&PinCfg);
-	
+
   UARTConfigStruct.Baud_rate = ( uint32_t )baud;
   
   switch( databits )
@@ -195,10 +223,18 @@ u32 platform_uart_setup( unsigned id, u32 baud, int databits, int parity, int st
     case PLATFORM_UART_PARITY_EVEN:
       UARTConfigStruct.Parity = UART_PARITY_EVEN;
       break;
+      
+    case PLATFORM_UART_PARITY_MARK:
+      UARTConfigStruct.Parity = UART_PARITY_SP_1;
+      break;
+      
+    case PLATFORM_UART_PARITY_SPACE:
+      UARTConfigStruct.Parity = UART_PARITY_SP_0;
+      break;      
   }
-	
+
   UART_Init(uart[ id ], &UARTConfigStruct);
-	
+
   // Get default FIFO config and initialize
   UART_FIFOConfigStructInit(&UARTFIFOConfigStruct);
   UART_FIFOConfig(uart[ id ], &UARTFIFOConfigStruct);
@@ -214,7 +250,7 @@ void platform_s_uart_send( unsigned id, u8 data )
   UART_Send(uart[ id ], &data, 1, BLOCKING);
 }
 
-int platform_s_uart_recv( unsigned id, s32 timeout )
+int platform_s_uart_recv( unsigned id, timer_data_type timeout )
 {
   u8 buffer;
   
@@ -256,8 +292,8 @@ static u32 platform_timer_set_clock( unsigned id, u32 clock )
 
   // Initialize timer 0, prescale count time of 1uS
   TIM_ConfigStruct.PrescaleOption = TIM_PRESCALE_USVAL;
-  TIM_ConfigStruct.PrescaleValue	= 1000000ULL / clock;
-	
+  TIM_ConfigStruct.PrescaleValue  = 1000000ULL / clock;
+
   TIM_Init( tmr[ id ], TIM_TIMER_MODE, &TIM_ConfigStruct );
   TIM_Cmd( tmr[ id ], ENABLE );
   TIM_ResetCounter( tmr[ id ] );
@@ -279,7 +315,7 @@ static void platform_setup_timers()
     platform_timer_set_clock( i, 1000000ULL );
 }
 
-void platform_s_timer_delay( unsigned id, u32 delay_us )
+void platform_s_timer_delay( unsigned id, timer_data_type delay_us )
 {
   u32 last;
 
@@ -289,7 +325,7 @@ void platform_s_timer_delay( unsigned id, u32 delay_us )
   while( tmr[ id ]->TC < last );
 }
       
-u32 platform_s_timer_op( unsigned id, int op, u32 data )
+timer_data_type platform_s_timer_op( unsigned id, int op, timer_data_type data )
 {
   u32 res = 0;
 
@@ -304,14 +340,6 @@ u32 platform_s_timer_op( unsigned id, int op, u32 data )
       res = tmr[ id ]->TC;
       break;
 
-    case PLATFORM_TIMER_OP_GET_MAX_DELAY:
-      res = platform_timer_get_diff_us( id, 0, 0xFFFFFFFF );
-      break;
-      
-    case PLATFORM_TIMER_OP_GET_MIN_DELAY:
-      res = platform_timer_get_diff_us( id, 0, 1 );
-      break;      
-      
     case PLATFORM_TIMER_OP_SET_CLOCK:
       res = platform_timer_set_clock( id, data );
       break;
@@ -319,8 +347,32 @@ u32 platform_s_timer_op( unsigned id, int op, u32 data )
     case PLATFORM_TIMER_OP_GET_CLOCK:
       res = platform_timer_get_clock( id );
       break;
+
+    case PLATFORM_TIMER_OP_GET_MAX_CNT:
+      res = 0xFFFFFFFF;
+      break;
   }
   return res;
+}
+
+u64 platform_timer_sys_raw_read()
+{
+  return SysTick->LOAD - SysTick->VAL;
+}
+
+void platform_timer_sys_disable_int()
+{
+  SysTick->CTRL &= ~SysTick_CTRL_TICKINT_Msk;
+}
+
+void platform_timer_sys_enable_int()
+{
+  SysTick->CTRL |= SysTick_CTRL_TICKINT_Msk;
+}
+
+timer_data_type platform_timer_read_sys()
+{
+  return cmn_systimer_get();
 }
 
 // *****************************************************************************
@@ -359,7 +411,7 @@ void ADC_IRQHandler(void)
 {
   elua_adc_dev_state *d = adc_get_dev_state( 0 );
   elua_adc_ch_state *s = d->ch_state[ d->seq_ctr ];
-  int i;
+//int i;
   
   // Disable sampling & current sequence channel
   ADC_StartCmd( LPC_ADC, 0 );
@@ -427,12 +479,12 @@ static void platform_setup_adcs()
   // Default enables ADC interrupt only on global, switch to per-channel
   ADC_IntConfig( LPC_ADC, ADC_ADGINTEN, DISABLE );
     
-  platform_adc_setclock( 0, 0 );
+  platform_adc_set_clock( 0, 0 );
 }
 
 
 // NOTE: On this platform, there is only one ADC, clock settings apply to the whole device
-u32 platform_adc_setclock( unsigned id, u32 frequency )
+u32 platform_adc_set_clock( unsigned id, u32 frequency )
 {
   TIM_TIMERCFG_Type TIM_ConfigStruct;
   TIM_MATCHCFG_Type TIM_MatchConfigStruct ;
@@ -448,7 +500,7 @@ u32 platform_adc_setclock( unsigned id, u32 frequency )
         
     // Run timer at 1MHz
     TIM_ConfigStruct.PrescaleOption = TIM_PRESCALE_USVAL;
-    TIM_ConfigStruct.PrescaleValue	= 1;
+    TIM_ConfigStruct.PrescaleValue     = 1;
     
     TIM_MatchConfigStruct.MatchChannel = 1;
     TIM_MatchConfigStruct.IntOnMatch   = FALSE;
@@ -459,7 +511,7 @@ u32 platform_adc_setclock( unsigned id, u32 frequency )
     TIM_MatchConfigStruct.MatchValue   = ( 1000000ULL / ( frequency * 2 ) ) - 1;
         
     frequency = 1000000ULL / (TIM_MatchConfigStruct.MatchValue + 1);
-  	
+  
     // Set configuration for Tim_config and Tim_MatchConfig
     TIM_Init( tmr[ d->timer_id ], TIM_TIMER_MODE, &TIM_ConfigStruct );
     TIM_ConfigMatch( tmr[ d->timer_id ], &TIM_MatchConfigStruct );
@@ -538,20 +590,20 @@ int platform_adc_start_sequence()
 
 
 // Helper function: get timer clock
-static u32 platform_pwm_get_clock( unsigned id )
+u32 platform_pwm_get_clock( unsigned id )
 {
   return CLKPWR_GetPCLK( CLKPWR_PCLKSEL_PWM1 ) / ( LPC_PWM1->PR + 1 );
 }
 
 // Helper function: set timer clock
-static u32 platform_pwm_set_clock( unsigned id, u32 clock )
+u32 platform_pwm_set_clock( unsigned id, u32 clock )
 {
   PWM_TIMERCFG_Type PWMCfgDat;
   
   PWMCfgDat.PrescaleOption = PWM_TIMER_PRESCALE_USVAL;
   PWMCfgDat.PrescaleValue = 1000000ULL / clock;
   PWM_Init( LPC_PWM1, PWM_MODE_TIMER, &PWMCfgDat );
-	
+
   return clock;
 }
 
@@ -599,59 +651,166 @@ u32 platform_pwm_setup( unsigned id, u32 frequency, unsigned duty )
   return platform_pwm_get_clock( id ) / divisor;
 }
 
-u32 platform_pwm_op( unsigned id, int op, u32 data )
+void platform_pwm_start( unsigned id )
 {
-  u32 res = 0;
+  PWM_Cmd(LPC_PWM1, ENABLE);
+}
 
-  switch( op )
-  {
-    case PLATFORM_PWM_OP_START:
-      PWM_Cmd(LPC_PWM1, ENABLE);
-      break;
-
-    case PLATFORM_PWM_OP_STOP:
-      PWM_Cmd(LPC_PWM1, DISABLE);
-      break;
-
-    case PLATFORM_PWM_OP_SET_CLOCK:
-      res = platform_pwm_set_clock( id, data );
-      break;
-
-    case PLATFORM_PWM_OP_GET_CLOCK:
-      res = platform_pwm_get_clock( id );
-      break;
-  }
-
-  return res;
+void platform_pwm_stop( unsigned id )
+{
+  PWM_Cmd(LPC_PWM1, DISABLE);
 }
 
 // ****************************************************************************
-// Platform specific modules go here
+// CAN
 
-#define MIN_OPT_LEVEL 2
-#include "lrodefs.h"
-extern const LUA_REG_TYPE mbed_pio_map[];
+volatile u32 can_rx_flag[2] = {0,0};
+volatile u32 can_err_flag[2] = {0,0};
+CAN_MSG_Type can_msg_rx[2];
 
-const LUA_REG_TYPE platform_map[] =
+void CAN_IRQHandler(void)
 {
-#if LUA_OPTIMIZE_MEMORY > 0
-  { LSTRKEY( "pio" ), LROVAL( mbed_pio_map ) },
-#endif
-  { LNILKEY, LNILVAL }
-};
-
-LUALIB_API int luaopen_platform( lua_State *L )
-{
-#if LUA_OPTIMIZE_MEMORY > 0
-  return 0;
-#else // #if LUA_OPTIMIZE_MEMORY > 0
-  luaL_register( L, PS_LIB_TABLE_NAME, platform_map );
+  // CAN1 Error (bits 1~10 cleared when read)
+  if (LPC_CAN1->ICR & (1<<2 | 1<<5 | 1<<7))
+    can_err_flag[0] = 1;
   
-  // Setup the new tables inside platform table
-  lua_newtable( L );
-  luaL_register( L, NULL, mbed_pio_map );
-  lua_setfield( L, -2, "pio" );
+  // CAN1 Receive
+  if (LPC_CAN1->ICR & (1<<0))
+  {
+    can_rx_flag[0] = 1;
+    CAN_ReceiveMsg(LPC_CAN1, &(can_msg_rx[0]));
+  }
 
-  return 1;
-#endif // #if LUA_OPTIMIZE_MEMORY > 0
+  // CAN2 Error (bits 1~10 cleared when read)
+  if (LPC_CAN2->ICR & (1<<2 | 1<<5 | 1<<7))
+    can_err_flag[1] = 1;
+
+  // CAN2 Receive
+  if (LPC_CAN2->ICR & (1<<0))
+  {
+    can_rx_flag[1] = 1;
+    CAN_ReceiveMsg(LPC_CAN2, &(can_msg_rx[1]));
+  }
 }
+
+void cans_init( void )
+{
+  // Enable power / clock
+  LPC_SC->PCONP |= 1<<13 | 1<<14;
+}
+
+
+u32 platform_can_setup( unsigned id, u32 clock )
+{  
+  LPC_CAN_TypeDef * canx;
+  uint32_t div;
+
+  switch (id)
+  {
+    case 0: canx = LPC_CAN1; break;
+    case 1: canx = LPC_CAN2; break;
+    default: return 0;
+  }
+
+  CAN_DeInit(canx); 
+  CAN_Init(canx, clock);
+  CAN_ModeConfig(canx, CAN_OPERATING_MODE, ENABLE); 
+  CAN_IRQCmd(canx, CANINT_RIE, ENABLE);   // Receive IRQ 
+  CAN_IRQCmd(canx, CANINT_EIE, ENABLE);   // Error IRQ 
+  CAN_IRQCmd(canx, CANINT_BEIE, ENABLE);  // Bus error IRQ 
+  LPC_CANAF->AFMR = 2;                    // Filter bypass (receive all messages) 
+  NVIC_EnableIRQ(CAN_IRQn);               // Enable IRQs
+
+  // Fix clock
+  LPC_SC->PCLKSEL0 &= ~(3<<26 | 3<<28 | 3<<30); // PCLK / 2
+  LPC_SC->PCLKSEL0 |=  (2<<26 | 2<<28 | 2<<30);
+  div = (SystemCoreClock / 20) / clock;
+  div --;
+	canx->MOD = 0x01; // Enter reset mode
+	canx->BTR  = (div & 0x3FF) | (3<<14) | (5<<16) | (2<<20) ; // Set bit timing
+	canx->MOD = 0;    // Return to normal operating
+
+  // Change pin function (for now using the MBED ones)
+  // And read clock divider
+  if (id == 0)
+  {
+    // Pin function
+    LPC_PINCON->PINSEL0 &= ~(3<<0 | 3<<2);
+    LPC_PINCON->PINSEL0 |= (1<<0 | 1<<2);
+
+    // No pull up / pull down
+    LPC_PINCON->PINMODE0 &= ~(3<<0 | 3<<2);
+    LPC_PINCON->PINMODE0 |= (2<<0 | 2<<2);
+
+    // NOT open drain
+    LPC_PINCON->PINMODE_OD0 &= ~(1<<0 | 1<<1);
+  }
+  else
+  {
+    LPC_PINCON->PINSEL0 &= ~(3<<8 | 3<<10);
+    LPC_PINCON->PINSEL0 |= (2<<8 | 2<<10);
+
+    // No pull up / pull down
+    LPC_PINCON->PINMODE0 &= ~(3<<8 | 3<<10);
+    LPC_PINCON->PINMODE0 |= (2<<8 | 2<<10);
+
+    // NOT open drain
+    LPC_PINCON->PINMODE_OD0 &= ~(1<<4 | 1<<5);
+  }
+
+  return (SystemCoreClock / 20) / ((div & 0x3FF)+1);
+}
+
+int platform_can_send( unsigned id, u32 canid, u8 idtype, u8 len, const u8 *data )
+{
+  CAN_MSG_Type msg_tx;
+  LPC_CAN_TypeDef * canx;
+
+  switch (id)
+  {
+    case 0: canx = LPC_CAN1; break;
+    case 1: canx = LPC_CAN2; break;
+    default: return PLATFORM_ERR;
+  }
+
+  // Wait for outgoing messages to clear
+  while( (canx->GSR & (1<<3)) == 0 );
+
+  msg_tx.type = DATA_FRAME;
+  msg_tx.format = idtype == ELUA_CAN_ID_EXT ? EXT_ID_FORMAT : STD_ID_FORMAT;
+  msg_tx.id = canid;
+  msg_tx.len = len;
+
+  if (len <= 4)
+    memcpy(msg_tx.dataA, data, len);
+  else
+  {
+    memcpy(msg_tx.dataA, data, 4);
+    memcpy(msg_tx.dataB, data+4, len-4);
+  }
+
+  CAN_SendMsg(canx, &msg_tx);
+
+  return PLATFORM_OK;
+}
+
+int platform_can_recv( unsigned id, u32 *canid, u8 *idtype, u8 *len, u8 *data )
+{
+  // wait for a message
+  if( can_rx_flag[id] != 0 )
+  {
+    memcpy(data, &(can_msg_rx[id].dataA), 4);
+    memcpy(data+4, &(can_msg_rx[id].dataB), 4); 
+
+    can_rx_flag[id] = 0;
+
+    *canid = ( u32 )can_msg_rx[id].id;
+    *idtype = can_msg_rx[id].format == EXT_ID_FORMAT ? ELUA_CAN_ID_EXT : ELUA_CAN_ID_STD;
+    *len = can_msg_rx[id].len;
+
+    return PLATFORM_OK;
+  }
+  else
+    return PLATFORM_UNDERFLOW;
+}
+

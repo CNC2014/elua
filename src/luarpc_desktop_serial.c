@@ -12,10 +12,17 @@
 #include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
-#include "platform_conf.h"
 
 #include "luarpc_rpc.h"
-#include "serial.h"
+#include "rpc_serial.h"
+
+#ifndef LUA_CROSS_COMPILER
+#include "platform_conf.h"
+#endif
+
+#ifdef LUA_RPC
+#include "desktop_conf.h"
+#endif
 
 void transport_open( Transport *tpt, const char *path );
 
@@ -41,7 +48,7 @@ void transport_open( Transport *tpt, const char *path )
   }
   
   ser_setup( tpt->fd, 115200, SER_DATABITS_8, SER_PARITY_NONE, SER_STOPBITS_1 );
-  ser_set_timeout_ms( tpt->fd, 1000 );
+  ser_set_timeout_ms( tpt->fd, 10000 );
 }
 
 // Open Listener / Server 
@@ -82,7 +89,7 @@ void transport_accept (Transport *tpt, Transport *atpt)
 // Read & Write to Transport
 void transport_read_buffer (Transport *tpt, u8 *buffer, int length)
 {
-  u32 n;
+  int n;
   struct exception e;
   TRANSPORT_VERIFY_OPEN;
   

@@ -24,7 +24,7 @@ elua_adc_dev_state *adc_get_dev_state( unsigned dev_id )
   return &adc_dev_state;
 }
 
-// Rewrite revice sequence
+// Rewrite device sequence
 void adc_update_dev_sequence( unsigned dev_id  )
 {
   elua_adc_dev_state *d = adc_get_dev_state( dev_id );
@@ -79,8 +79,8 @@ int adc_setup_channel( unsigned id, u8 logcount )
 #if defined( BUF_ENABLE_ADC )
   int res;
 
-  old_status = platform_cpu_get_global_interrupts( PLATFORM_CPU_DISABLE );
-  if( ( (u16) 1 << logcount ) != buf_get_size( BUF_ID_ADC, id ) )
+  old_status = platform_cpu_get_global_interrupts( ); // Had argument PLATFORM_CPU_DISABLE, but the prototype does not list an argument, and none of the 
+  if( ((unsigned) ( (u16) 1 << logcount )) != buf_get_size( BUF_ID_ADC, id ) )
   {   
     res = buf_set( BUF_ID_ADC, id, logcount, BUF_DSIZE_U16 );
     if ( res != PLATFORM_OK )
@@ -126,7 +126,7 @@ void adc_init_ch_state( unsigned id )
 #endif
 
   // Set to run as fast as possible
-  platform_adc_setclock( id, 0 );
+  platform_adc_set_clock( id, 0 );
 }
 
 void adc_init_dev_state( unsigned dev_id )

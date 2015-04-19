@@ -1,16 +1,23 @@
 // Interface with core services
 
-#include "lua.h"
+//#include "lua.h"
 #include "lualib.h"
 #include "lauxlib.h"
 #include "platform.h"
 #include "auxmods.h"
 #include "lrotable.h"
 #include "legc.h"
-#include "version.h"
 #include "platform_conf.h"
 #include "linenoise.h"
+#include "shell.h"
 #include <string.h>
+#include <stdlib.h>
+
+#if defined( USE_GIT_REVISION )
+#include "git_version.h"
+#else
+#include "version.h"
+#endif
 
 // Lua: elua.egc_setup( mode, [ memlimit ] )
 static int elua_egc_setup( lua_State *L )
@@ -38,7 +45,7 @@ static int elua_save_history( lua_State *L )
 #ifdef BUILD_LINENOISE
   const char* fname = luaL_checkstring( L, 1 );
   int res;
-  
+
   res = linenoise_savehistory( LINENOISE_ID_LUA, fname );
   if( res == 0 )
     printf( "History saved to %s.\n", fname );
@@ -48,20 +55,41 @@ static int elua_save_history( lua_State *L )
     printf( "History empty, nothing to save.\n" );
   else
     printf( "Unable to save history to %s.\n", fname );
-  return 0;  
+  return 0;
 #else // #ifdef BUILD_LINENOISE
   return luaL_error( L, "linenoise support not enabled." );
 #endif // #ifdef BUILD_LINENOISE
 }
 
+#ifdef BUILD_SHELL
+// Lua: elua.shell( <shell_command> )
+static int elua_shell( lua_State *L )
+{
+  const char *pcmd = luaL_checkstring( L, 1 );
+  char *cmdcpy;
+
+  // "+2" below comes from the string terminator (+1) and the '\n'
+  // that will be added by the shell code (+1)
+  if( ( cmdcpy = ( char* )malloc( strlen( pcmd ) + 2 ) ) == NULL )
+    return luaL_error( L, "not enough memory for elua_shell" );
+  strcpy( cmdcpy, pcmd );
+  shellh_execute_command( cmdcpy, 0 );
+  free( cmdcpy );
+  return 0;
+}
+#endif
+
 // Module function map
 #define MIN_OPT_LEVEL 2
 #include "lrodefs.h"
-const LUA_REG_TYPE elua_map[] = 
+const LUA_REG_TYPE elua_map[] =
 {
   { LSTRKEY( "egc_setup" ), LFUNCVAL( elua_egc_setup ) },
-  { LSTRKEY( "version" ), LFUNCVAL( elua_version ) },  
+  { LSTRKEY( "version" ), LFUNCVAL( elua_version ) },
   { LSTRKEY( "save_history" ), LFUNCVAL( elua_save_history ) },
+#ifdef BUILD_SHELL
+  { LSTRKEY( "shell" ), LFUNCVAL( elua_shell ) },
+#endif
 #if LUA_OPTIMIZE_MEMORY > 0
   { LSTRKEY( "EGC_NOT_ACTIVE" ), LNUMVAL( EGC_NOT_ACTIVE ) },
   { LSTRKEY( "EGC_ON_ALLOC_FAILURE" ), LNUMVAL( EGC_ON_ALLOC_FAILURE ) },
