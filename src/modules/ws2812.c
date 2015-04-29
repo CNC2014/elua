@@ -42,7 +42,7 @@ static int ws2812_init( lua_State *L )
   MOD_CHECK_ID( timer, id );
   tmr_id = id;
   platform_timer_op( tmr_id, PLATFORM_TIMER_OP_SET_CLOCK, WS2812_CLOCK );
-  printf("clock: %llu\n", platform_timer_op( id, PLATFORM_TIMER_OP_GET_CLOCK, 0 ));
+
   return 0;
 }
 
@@ -83,6 +83,7 @@ static int ws2812_writergb( lua_State *L )
 {
   size_t len;
   int pos;
+  int pos_tmp;
   u8 mask;
   int code = ( int )luaL_checkinteger( L, 1 );
   int port = PLATFORM_IO_GET_PORT( code );
@@ -94,17 +95,30 @@ static int ws2812_writergb( lua_State *L )
   if( tmr_id < 0 )
     return luaL_error( L, "timer not configured" );
 
+  platform_timer_op( tmr_id, PLATFORM_TIMER_OP_START, 0 );
+
   platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_DIR_OUTPUT );
 
   const char *grb_str = luaL_checklstring( L, 2, &len );
 
+  int old_status;
+  old_status = platform_cpu_set_global_interrupts( PLATFORM_CPU_DISABLE );
+
   for( pos = 0; pos < len; pos++ )
   {
+    pos_tmp = pos;
+    if( pos % 3 == 0 )
+      pos_tmp++;
+    else if( pos % 3 == 1 )
+      pos_tmp--;
+
     for( mask = 0x80; mask; mask >>= 1 )
     {
-      ( grb_str[ pos ] & mask ) ? ws2812_write_1( port, pin ) : ws2812_write_0( port, pin );
+      ( grb_str[ pos_tmp ] & mask ) ? ws2812_write_1( port, pin ) : ws2812_write_0( port, pin );
     }
   }
+
+  platform_cpu_set_global_interrupts( old_status );
 
   return 0;
 }
