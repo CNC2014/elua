@@ -13,21 +13,9 @@
 #define WS2812_CLOCK 50000000
 #define WS2812_SCALE_NS ( 1000000000 / WS2812_CLOCK )
 
-GPIO_TypeDef * const pio_port[] = { GPIOA, GPIOB, GPIOC, GPIOD, GPIOE, GPIOF, GPIOG, GPIOH, GPIOI };
-const TIM_TypeDef * const timer[] = {
-  TIM1,   // ID: 0
-  TIM2,   // ID: 1
-  TIM3,   // ID: 2
-  TIM4,   // ID: 3
-  TIM5,   // ID: 4
-  TIM8,   // ID: 5
-  TIM9,   // ID: 6
-  TIM10,  // ID: 7
-  TIM11,  // ID: 8
-  TIM12,  // ID: 9
-  TIM13,  // ID: 10
-  TIM14   // ID: 11
-};
+extern TIM_TypeDef *const timer[];
+extern GPIO_TypeDef * const pio_port[];
+
 
 int tmr_id = -1;
 
@@ -54,7 +42,7 @@ timer_data_type platform_timer_get_diff_ns( unsigned id, timer_data_type start, 
 
 static void ws2812_write_0( int port, int pin )
 {
-  timer_data_type start_time = TIM2->CNT;
+  timer_data_type start_time = timer[tmr_id]->CNT;
   //platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_SET );
   pio_port[port]->BSRRL = ( u32 ) 1 << pin;
   while( ( timer[tmr_id]->CNT - start_time ) < ( 350 / WS2812_SCALE_NS ) );
@@ -66,7 +54,7 @@ static void ws2812_write_0( int port, int pin )
 
 static void ws2812_write_1( int port, int pin )
 {
-  timer_data_type start_time = TIM2->CNT;
+  timer_data_type start_time = timer[tmr_id]->CNT;
   //timer_data_type first_wait;
   //first_wait = platform_timer_get_diff_ns_crt( tmr_id, start_time);
   //platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_SET );
