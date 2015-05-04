@@ -9,6 +9,7 @@ local comps = require "components"
 function add_platform_components( t, board, cpu )
   t.cdc = comps.cdc_uart()
   t.stm32f4_enc = { macro = 'ENABLE_ENC' }
+  t.stm32f4_ws2812 = { macro = 'ENABLE_WS2812' }
 end
 
 -- Add specific configuration to the 'configs' table
@@ -29,6 +30,7 @@ end
 function get_platform_modules( board, cpu )
   return { pio = { lib = '"pio"', map = "stm32_pio_map", open = false },
            cpu = { lib = '"cpu"', map = "stm32_cpu_map", open = "luaopen_stm32_cpu" },
-           enc = { guards = { 'ENABLE_ENC' }, lib = '"enc"' } }
+           enc = { guards = { 'ENABLE_ENC' }, lib = '"enc"' },
+           ws2812 = { guards = { 'ENABLE_WS2812' }, lib = '"ws2812"' } }
 end
 
