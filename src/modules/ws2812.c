@@ -43,27 +43,27 @@ timer_data_type platform_timer_get_diff_ns( unsigned id, timer_data_type start, 
 static void ws2812_write_0( int port, int pin )
 {
   timer_data_type start_time = timer[tmr_id]->CNT;
-  //platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_SET );
+
   pio_port[port]->BSRRL = ( u32 ) 1 << pin;
-  while( ( timer[tmr_id]->CNT - start_time ) < ( 350 / WS2812_SCALE_NS ) );
-  //platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_CLEAR );
+
+  while( ( timer[tmr_id]->CNT - start_time ) < ( 250 / WS2812_SCALE_NS ) );
+
   pio_port[port]->BSRRH = ( u32 ) 1 << pin;
-  while(( timer[tmr_id]->CNT - start_time ) < ( 1250 / WS2812_SCALE_NS ) );
-  //printf("end_ns_0: %llu, %lu\n", start_time, (u32)platform_timer_get_diff_ns_crt( tmr_id, start_time));
+
+  while(( timer[tmr_id]->CNT - start_time ) < ( 1000 / WS2812_SCALE_NS ) );
 }
 
 static void ws2812_write_1( int port, int pin )
 {
   timer_data_type start_time = timer[tmr_id]->CNT;
-  //timer_data_type first_wait;
-  //first_wait = platform_timer_get_diff_ns_crt( tmr_id, start_time);
-  //platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_SET );
+
   pio_port[port]->BSRRL = ( u32 ) 1 << pin;
-  while( ( timer[tmr_id]->CNT - start_time ) < ( 700 / WS2812_SCALE_NS ) );
-  //platform_pio_op( port, ( ( u32 ) 1 << pin ), PLATFORM_IO_PIN_CLEAR );
+
+  while( ( timer[tmr_id]->CNT - start_time ) < ( 600 / WS2812_SCALE_NS ) );
+
   pio_port[port]->BSRRH = ( u32 ) 1 << pin;
-  while( ( timer[tmr_id]->CNT - start_time ) < ( 1250 / WS2812_SCALE_NS ) );
-  //printf("end_ns_1: %llu, %lu\n", start_time, (u32)platform_timer_get_diff_ns_crt( tmr_id, start_time));
+
+  while( ( timer[tmr_id]->CNT - start_time ) < ( 1000 / WS2812_SCALE_NS ) );
 }
 
 //Lua: writergb(pin, string)
