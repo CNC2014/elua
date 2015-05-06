@@ -30,7 +30,7 @@ addlf( { '-nostartfiles','-nostdlib', '-T', ldscript, '-Wl,--gc-sections', '-Wl,
 addaf( { '-x', 'assembler-with-cpp', '-c', '-Wall' } )
 addlib( { 'c','gcc','m' } )
 
-local target_flags = { '-mcpu=cortex-m4', '-mthumb','-mfloat-abi=hard', '-mfpu=fpv4-sp-d16' }
+local target_flags = { '-mcpu=cortex-m4', '-mthumb' }
 
 -- Configure general flags for target
 addcf( { target_flags, '-mlittle-endian' } )
