@@ -27,7 +27,7 @@ extern GPIO_TypeDef * const pio_port[];
 extern const u8 timer_width[];
 
 int tmr_id = -1;
-u32 tmr_scale_ns = -1;
+s32 tmr_scale_ns = -1;
 
 //Lua: init(tmr_id)
 static int ws2812_init( lua_State *L )
