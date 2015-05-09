@@ -27,12 +27,15 @@ extern GPIO_TypeDef * const pio_port[];
 extern const u8 timer_width[];
 
 int tmr_id = -1;
-s32 tmr_scale_ns = -1;
+
+
+u32 toh_cnt, t1h_cnt, tld_cnt, tll_cnt = 0;
 
 //Lua: init(tmr_id)
 static int ws2812_init( lua_State *L )
 {
   unsigned id;
+  u32 tmr_scale_ns;
   
   id = luaL_checkinteger( L, 1 );
   MOD_CHECK_ID( timer, id );
@@ -43,37 +46,44 @@ static int ws2812_init( lua_State *L )
   tmr_id = id;
   tmr_scale_ns = 1000000000 / platform_timer_op( tmr_id, PLATFORM_TIMER_OP_SET_CLOCK, WS2812_CLOCK );
 
+  toh_cnt = ( s32 )( WS2812_TOH / tmr_scale_ns );
+  tld_cnt = ( s32 )( WS2812_TLD / tmr_scale_ns );
+  t1h_cnt = ( s32 )( WS2812_T1H / tmr_scale_ns );
+  tll_cnt = ( s32 )( WS2812_TLL / tmr_scale_ns );
+
   return 0;
 }
 
 // TODO: Resolve portability issue(s):
-//       - timer is read before setting the pin state which doesn't guarantee minimum timings, 
-//         when done after, however, we aren't able to get T0H short enough
 //       - support 16-bit timers in addition to 32-bit
 static void ws2812_write_0( int port, int pin )
 {
-  u32 start_time = timer[tmr_id]->CNT;
+  u32 start_time;
 
   pio_port[ port ]->BSRRL = ( u32 ) 1 << pin;
 
-  while( ( timer[ tmr_id ]->CNT - start_time ) < ( WS2812_TOH / tmr_scale_ns ) );
+  start_time = timer[tmr_id]->CNT;
+  while( ( timer[ tmr_id ]->CNT - start_time ) < ( toh_cnt ) );
 
   pio_port[ port ]->BSRRH = ( u32 ) 1 << pin;
 
-  while( ( timer[ tmr_id ]->CNT - start_time ) < ( ( WS2812_TOH  + WS2812_TLD ) / tmr_scale_ns ) );
+  start_time = timer[tmr_id]->CNT;
+  while( ( timer[ tmr_id ]->CNT - start_time ) < ( tld_cnt ) );
 }
 
 static void ws2812_write_1( int port, int pin )
 {
-  u32 start_time = timer[ tmr_id ]->CNT;
+  u32 start_time;
 
   pio_port[ port ]->BSRRL = ( u32 ) 1 << pin;
 
-  while( ( timer[ tmr_id ]->CNT - start_time ) < ( WS2812_T1H / tmr_scale_ns ) );
+  start_time = timer[ tmr_id ]->CNT;
+  while( ( timer[ tmr_id ]->CNT - start_time ) < ( t1h_cnt ) );
 
   pio_port[ port ]->BSRRH = ( u32 ) 1 << pin;
 
-  while( ( timer[ tmr_id ]->CNT - start_time ) < ( ( WS2812_T1H + WS2812_TLD ) / tmr_scale_ns ) );
+  start_time = timer[ tmr_id ]->CNT;
+  while( ( timer[ tmr_id ]->CNT - start_time ) < ( tld_cnt ) );
 }
 
 //Lua: writergb(pin, string)
@@ -92,7 +102,7 @@ static int ws2812_writergb( lua_State *L )
   if( PLATFORM_IO_IS_PORT( code ) || !platform_pio_has_port( port ) || !platform_pio_has_pin( port, pin ) )
     return luaL_error( L, "invalid pin" );
 
-  if( tmr_id < 0 || tmr_scale_ns < 0 )
+  if( tmr_id < 0 || toh_cnt == 0 || t1h_cnt == 0 || tld_cnt == 0 || tll_cnt == 0 )
     return luaL_error( L, "timer not configured" );
 
   if( timer_width[ tmr_id ] != 32 )
@@ -134,7 +144,7 @@ static int ws2812_writergb( lua_State *L )
   platform_cpu_set_global_interrupts( old_status );
 
   start_time = timer[ tmr_id ]->CNT;
-  while( ( timer[ tmr_id ]->CNT - start_time ) < ( WS2812_TLL ) );
+  while( ( timer[ tmr_id ]->CNT - start_time ) < ( tll_cnt ) );
 
   return 0;
 }
