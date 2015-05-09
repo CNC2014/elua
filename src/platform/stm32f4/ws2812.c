@@ -24,11 +24,14 @@
 
 extern TIM_TypeDef *const timer[];
 extern GPIO_TypeDef * const pio_port[];
+extern const u8 timer_width[];
 
 int tmr_id = -1;
 u32 tmr_scale_ns = -1;
 
 //Lua: init(tmr_id)
+// NOTE: this currently requires a 32-bit timer since the timer is only reset once per write and we
+//       don't currently handle timer overflows
 static int ws2812_init( lua_State *L )
 {
   unsigned id;
@@ -41,9 +44,13 @@ static int ws2812_init( lua_State *L )
   return 0;
 }
 
+// TODO: Resolve portability issue(s):
+//       - timer is read before setting the pin state which doesn't guarantee minimum timings, 
+//         when done after, however, we aren't able to get T0H short enough
+//       - support 16-bit timers in addition to 32-bit
 static void ws2812_write_0( int port, int pin )
 {
-  timer_data_type start_time = timer[tmr_id]->CNT;
+  u32 start_time = timer[tmr_id]->CNT;
 
   pio_port[ port ]->BSRRL = ( u32 ) 1 << pin;
 
@@ -56,7 +63,7 @@ static void ws2812_write_0( int port, int pin )
 
 static void ws2812_write_1( int port, int pin )
 {
-  timer_data_type start_time = timer[ tmr_id ]->CNT;
+  u32 start_time = timer[ tmr_id ]->CNT;
 
   pio_port[ port ]->BSRRL = ( u32 ) 1 << pin;
 
@@ -73,7 +80,7 @@ static int ws2812_writergb( lua_State *L )
   size_t len;
   int pos, pos_tmp, old_status;
   u8 mask;
-  timer_data_type start_time;
+  u32 start_time;
   
   int code = ( int )luaL_checkinteger( L, 1 );
   int port = PLATFORM_IO_GET_PORT( code );
@@ -85,6 +92,9 @@ static int ws2812_writergb( lua_State *L )
 
   if( tmr_id < 0 || tmr_scale_ns < 0 )
     return luaL_error( L, "timer not configured" );
+
+  if( timer_width[ tmr_id ] != 32 )
+    return luaL_error( L, "32-bit timer required" );
 
   platform_timer_op( tmr_id, PLATFORM_TIMER_OP_START, 0 );
 
