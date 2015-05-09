@@ -30,14 +30,16 @@ int tmr_id = -1;
 u32 tmr_scale_ns = -1;
 
 //Lua: init(tmr_id)
-// NOTE: this currently requires a 32-bit timer since the timer is only reset once per write and we
-//       don't currently handle timer overflows
 static int ws2812_init( lua_State *L )
 {
   unsigned id;
   
   id = luaL_checkinteger( L, 1 );
   MOD_CHECK_ID( timer, id );
+  
+  if( timer_width[ id ] != 32 )
+    return luaL_error( L, "32-bit timer required" );
+
   tmr_id = id;
   tmr_scale_ns = 1000000000 / platform_timer_op( tmr_id, PLATFORM_TIMER_OP_SET_CLOCK, WS2812_CLOCK );
 
