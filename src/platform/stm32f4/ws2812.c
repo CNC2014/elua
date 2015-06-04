@@ -21,14 +21,11 @@
 #define WS2812_TLD 450
 #define WS2812_TLL 6000
 
-
 extern TIM_TypeDef *const timer[];
 extern GPIO_TypeDef * const pio_port[];
 extern const u8 timer_width[];
 
 int tmr_id = -1;
-
-
 u32 toh_cnt, t1h_cnt, tld_cnt, tll_cnt = 0;
 
 //Lua: init(tmr_id)
@@ -60,13 +57,17 @@ static void ws2812_write_0( int port, int pin )
 {
   u32 start_time;
 
+  // Set Pin High
   pio_port[ port ]->BSRRL = ( u32 ) 1 << pin;
 
+  // Wait at minimum delay for T0H
   start_time = timer[tmr_id]->CNT;
   while( ( timer[ tmr_id ]->CNT - start_time ) < ( toh_cnt ) );
 
+  // Set Pin Low
   pio_port[ port ]->BSRRH = ( u32 ) 1 << pin;
 
+  // Wait at minumum delay for TLD
   start_time = timer[tmr_id]->CNT;
   while( ( timer[ tmr_id ]->CNT - start_time ) < ( tld_cnt ) );
 }
@@ -75,13 +76,17 @@ static void ws2812_write_1( int port, int pin )
 {
   u32 start_time;
 
+  // Set Pin High
   pio_port[ port ]->BSRRL = ( u32 ) 1 << pin;
 
+  // Wait at minimum delay for T1H
   start_time = timer[ tmr_id ]->CNT;
   while( ( timer[ tmr_id ]->CNT - start_time ) < ( t1h_cnt ) );
 
+  // Set Pin Low
   pio_port[ port ]->BSRRH = ( u32 ) 1 << pin;
 
+  // Wait at minimum delay for TLD
   start_time = timer[ tmr_id ]->CNT;
   while( ( timer[ tmr_id ]->CNT - start_time ) < ( tld_cnt ) );
 }
@@ -103,11 +108,12 @@ static int ws2812_writergb( lua_State *L )
     return luaL_error( L, "invalid pin" );
 
   if( tmr_id < 0 || toh_cnt == 0 || t1h_cnt == 0 || tld_cnt == 0 || tll_cnt == 0 )
-    return luaL_error( L, "timer not configured" );
+    return luaL_error( L, "timer not configured or unable to run at sufficient frequency" );
 
   if( timer_width[ tmr_id ] != 32 )
     return luaL_error( L, "32-bit timer required" );
 
+  // Start timer (zeros current count & starts)
   platform_timer_op( tmr_id, PLATFORM_TIMER_OP_START, 0 );
 
   // Set up pin
