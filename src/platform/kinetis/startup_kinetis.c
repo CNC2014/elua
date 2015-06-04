@@ -104,7 +104,7 @@ void Default_Handler(void) {
 
 __attribute__ ((section(".isr_vector"))) void (* const g_pfnVectors[])(void) =
 {
-    (void (*)(void))( SRAM_BASE + SRAM_SIZE ), /* The initial stack pointer */
+    (void (*)(void))( INTERNAL_SRAM_BASE + INTERNAL_SRAM_SIZE ), /* The initial stack pointer */
     Reset_Handler,             /* Reset Handler */
     NMI_Handler,               /* NMI Handler */
     HardFault_Handler,         /* Hard Fault Handler */
